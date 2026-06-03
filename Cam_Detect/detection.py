@@ -3,6 +3,7 @@ import json
 import time
 from collections import deque
 from ultralytics import YOLO
+from hand_analysis import HandAnalyser
 
 # ── Load site config ─────────────────────────────────────────────
 with open("site_config.json", "r") as f:
@@ -29,6 +30,9 @@ model = YOLO("yolov8n-pose.pt")
 LEFT_WRIST = 9
 RIGHT_WRIST = 10
 
+# ── MediaPipe Hand Analyser ───────────────────────────────────────
+analyser = HandAnalyser()
+
 # ── Webcam ───────────────────────────────────────────────────────
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
@@ -49,6 +53,7 @@ SOAPING = "SOAPING"
 RUBBING = "RUBBING"
 RINSING = "RINSING"
 DRYING = "DRYING"
+RECONTAMINATION = "RECONTAMINATION"
 COMPLETE = "COMPLETE"
 
 # ── Session variables ────────────────────────────────────────────
@@ -56,9 +61,10 @@ state = IDLE
 session_start = 0.0
 rub_start = 0.0
 rub_duration = 0.0
+last_rub_time = 0.0
 dry_start = 0.0
 dry_duration = 0.0
-sink_entry_time = 0.0       # when person first entered sink without soap
+sink_entry_time = 0.0
 steps_completed = []
 last_seen = 0.0
 result_display = ""
@@ -67,6 +73,7 @@ result_timer = 0.0
 prev_lw = (0, 0)
 prev_rw = (0, 0)
 rub_confirm_count = 0
+technique_summary = None
 
 lw_history = deque(maxlen=3)
 rw_history = deque(maxlen=3)
@@ -76,12 +83,17 @@ MOTION_THRESHOLD = 3
 RUBBING_CONFIRM_FRAMES = 8
 NO_PERSON_TIMEOUT = 3.0
 RESULT_DISPLAY_TIME = 4.0
-WARNING_DURATION = 21.0
+WARNING_DURATION = 15.0
 SESSION_TIMEOUT = 60.0
-MIN_DRY_DURATION = 4.0
+MIN_DRY_DURATION = 5.0
 KEYPOINT_CONFIDENCE = 0.3
-SOAP_GRACE_PERIOD = 4.0         # seconds to wait at sink before assuming no soap
-ASSUMED_SOAP_DURATION = 10.0    # seconds of rubbing before assuming soap was used
+SOAP_GRACE_PERIOD = 4.0
+ASSUMED_SOAP_DURATION = 10.0
+RUB_PAUSE_TOLERANCE = 2.0
+
+# ── Frame skip for performance ───────────────────────────────────
+frame_count = 0
+last_keypoints = None
 
 # ── Helpers ──────────────────────────────────────────────────────
 def point_in_zone(px, py, zone):
@@ -116,12 +128,14 @@ def log_step(step):
         print(f"  ✔ Step: {step}")
 
 def conclude_session():
-    global state, result_display, result_color, result_timer
+    global state, result_display, result_color, result_timer, technique_summary
 
     has_soap = "soap" in steps_completed
     has_rub = "rub" in steps_completed
     has_rinse = "rinse" in steps_completed
     has_dry = "dry" in steps_completed
+
+    technique_summary = analyser.get_summary()
 
     if has_soap and has_rub and has_rinse and has_dry and rub_duration >= min_wash_duration:
         result_display = "PASS"
@@ -133,26 +147,41 @@ def conclude_session():
         result_display = "FAIL"
         result_color = (0, 0, 255)
 
+    expected = ["soap", "rub", "rinse", "dry"]
+    missed = [s for s in expected if s not in steps_completed]
+
     print(f"\n{'='*30}")
     print(f"Result:          {result_display}")
     print(f"Steps completed: {steps_completed}")
+    print(f"Missed steps:    {missed}")
     print(f"Rub duration:    {rub_duration:.1f}s")
     print(f"Dry duration:    {dry_duration:.1f}s")
+    if "recontamination" in steps_completed:
+        print("  ⚠ Recontamination flagged")
+    print(f"\n── Technique Summary ──")
+    print(f"Score:           {technique_summary['technique_score']}/4")
+    print(f"Palm up:         {technique_summary['palm_up']}")
+    print(f"Palm down:       {technique_summary['palm_down']}")
+    print(f"Fingers spread:  {technique_summary['fingers_spread']}")
+    print(f"Wrist rubbed:    {technique_summary['wrist_rubbed']}")
+    if technique_summary['missing']:
+        print(f"Missing:         {technique_summary['missing']}")
     print(f"{'='*30}\n")
 
     state = COMPLETE
     result_timer = time.time()
 
 def reset_session():
-    global state, session_start, rub_start, rub_duration
+    global state, session_start, rub_start, rub_duration, last_rub_time
     global dry_start, dry_duration, sink_entry_time
     global steps_completed, prev_lw, prev_rw
-    global result_display, result_color, rub_confirm_count
+    global result_display, result_color, rub_confirm_count, technique_summary
 
     state = IDLE
     session_start = 0.0
     rub_start = 0.0
     rub_duration = 0.0
+    last_rub_time = 0.0
     dry_start = 0.0
     dry_duration = 0.0
     sink_entry_time = 0.0
@@ -162,12 +191,12 @@ def reset_session():
     rub_confirm_count = 0
     result_display = ""
     result_color = (255, 255, 255)
+    technique_summary = None
     lw_history.clear()
     rw_history.clear()
+    analyser.reset()
 
 print("Running — press Q to quit\n")
-frame_count = 0
-last_keypoints = None
 
 # ── Main loop ────────────────────────────────────────────────────
 while True:
@@ -182,6 +211,7 @@ while True:
         print("Session timed out")
         conclude_session()
 
+    # Run model every other frame for performance
     frame_count += 1
     if frame_count % 2 == 0:
         results = model(frame.copy(), verbose=False)
@@ -193,7 +223,7 @@ while True:
     if person_detected:
         last_seen = now
         kp = keypoints.xy[0]
-        kp_conf = results[0].keypoints.conf[0]
+        kp_conf = keypoints.conf[0]
 
         lw_conf = float(kp_conf[LEFT_WRIST])
         rw_conf = float(kp_conf[RIGHT_WRIST])
@@ -221,25 +251,22 @@ while True:
         # ── State machine ────────────────────────────────────────
         if state == IDLE:
             if in_soap:
-                # Person touched soap first — normal flow
                 state = SOAPING
                 session_start = now
+                analyser.reset()
                 print("Session started — soap first")
             elif in_sink:
-                # Person went straight to sink — start grace period
-                # Don't commit to SOAPING or RUBBING yet
                 state = SOAPING
                 session_start = now
                 sink_entry_time = now
+                analyser.reset()
                 print("Session started — sink first, waiting for soap...")
 
         elif state == SOAPING:
             if in_soap:
-                # Person reached soap zone — log it
                 log_step("soap")
-                sink_entry_time = 0.0  # clear grace period, soap confirmed
+                sink_entry_time = 0.0
 
-            # Allow rubbing only after soap is confirmed OR grace period has passed
             soap_confirmed = "soap" in steps_completed
             grace_passed = sink_entry_time > 0 and (now - sink_entry_time) > SOAP_GRACE_PERIOD
 
@@ -249,27 +276,33 @@ while True:
                     if rub_confirm_count >= RUBBING_CONFIRM_FRAMES:
                         state = RUBBING
                         rub_start = now
+                        last_rub_time = now
                 else:
                     rub_confirm_count = 0
 
         elif state == RUBBING:
+            # Run hand analysis every frame during rubbing
+            _, frame = analyser.analyse(frame)
+
             if rubbing:
                 rub_duration += now - rub_start
                 rub_start = now
-                rub_confirm_count = RUBBING_CONFIRM_FRAMES
-
-                # If rubbing for 10s without soap step, assume soap was NOT used — mark as skipped
-                if "soap" not in steps_completed and rub_duration >= ASSUMED_SOAP_DURATION:
-                    print("  (soap skipped — rubbing 10s without soap step)")
+                last_rub_time = now
             else:
-                rub_confirm_count -= 1
-                if rub_confirm_count <= 0:
-                    if rub_duration >= WARNING_DURATION:
-                        log_step("rub")
-                        state = RINSING
+                if now - last_rub_time < RUB_PAUSE_TOLERANCE:
+                    rub_duration += now - rub_start
+                    rub_start = now
+                else:
+                    rub_start = now
 
-            # Advance to rinsing when min duration met and hands leave sink
+            if "soap" not in steps_completed and rub_duration >= ASSUMED_SOAP_DURATION:
+                print("  (soap skipped — rubbing 10s without soap step)")
+
             if rub_duration >= min_wash_duration and not in_sink:
+                log_step("rub")
+                state = RINSING
+
+            if rub_duration >= WARNING_DURATION and (now - last_rub_time) >= RUB_PAUSE_TOLERANCE:
                 log_step("rub")
                 state = RINSING
 
@@ -288,6 +321,15 @@ while True:
 
             if dry_duration >= MIN_DRY_DURATION:
                 log_step("dry")
+                state = RECONTAMINATION
+                result_timer = now
+                print("Drying complete — monitoring for recontamination...")
+
+        elif state == RECONTAMINATION:
+            if in_sink:
+                print("  ⚠ Recontamination detected — wrist touched tap after drying")
+                log_step("recontamination")
+            if now - result_timer > 3.0:
                 conclude_session()
 
         elif state == COMPLETE:
@@ -332,6 +374,12 @@ while True:
         cv2.putText(frame, f"Waiting for soap... {grace_remaining:.1f}s",
                     (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 1)
 
+    if state == RUBBING and technique_summary is None:
+        technique = analyser.get_summary()
+        score_color = (0, 255, 0) if technique["technique_score"] >= 3 else (0, 165, 255)
+        cv2.putText(frame, f"Technique: {technique['technique_score']}/4",
+                    (10, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.5, score_color, 1)
+
     steps_str = " → ".join(steps_completed) if steps_completed else "none"
     cv2.putText(frame, f"Steps: {steps_str}", (10, 108),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
@@ -339,6 +387,10 @@ while True:
     if result_display and state == COMPLETE:
         cv2.putText(frame, result_display, (150, 280),
                     cv2.FONT_HERSHEY_SIMPLEX, 2.0, result_color, 4)
+
+        if technique_summary:
+            cv2.putText(frame, f"Technique: {technique_summary['technique_score']}/4",
+                        (150, 340), cv2.FONT_HERSHEY_SIMPLEX, 1.0, result_color, 2)
 
     cv2.putText(frame, site_name, (10, 470),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
@@ -351,3 +403,4 @@ while True:
 # ── Cleanup ──────────────────────────────────────────────────────
 cap.release()
 cv2.destroyAllWindows()
+analyser.hands.close()
