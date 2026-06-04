@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in &middot; Food Safety Monitoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1719; --panel:#15211f; --ink:#e8efe9; --muted:#8aa39a;
+    --line:#243430; --teal:#16a085; --teal-dim:#0e6b59; --amber:#d68910; --red:#c0392b;
+    --green:#27ae60;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--ink);
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background-image:
+      radial-gradient(circle at 15% 20%, rgba(22,160,133,.10), transparent 40%),
+      radial-gradient(circle at 85% 80%, rgba(22,160,133,.06), transparent 45%);
+    padding:24px;
+  }
+  .card{
+    width:100%;max-width:880px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;overflow:hidden;display:grid;grid-template-columns:1.1fr 1fr;
+    box-shadow:0 30px 80px rgba(0,0,0,.45);
+  }
+  .brand{
+    padding:48px 44px;border-right:1px solid var(--line);
+    background:linear-gradient(160deg, #16211f 0%, #101b19 100%);display:flex;flex-direction:column;
+  }
+  .logo{display:flex;align-items:center;gap:12px;margin-bottom:32px}
+  .logo .dot{width:34px;height:34px;border-radius:9px;background:var(--teal);
+    display:grid;place-items:center;font-size:18px}
+  .logo h1{font-size:15px;font-weight:600;letter-spacing:.02em;line-height:1.3}
+  .brand .lead{font-size:26px;font-weight:600;line-height:1.25;margin-top:auto;letter-spacing:-.01em}
+  .brand .sub{color:var(--muted);font-size:13.5px;margin-top:14px;line-height:1.6}
+  .demo{margin-top:30px;border-top:1px dashed var(--line);padding-top:20px}
+  .demo p{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px}
+  .accts{display:flex;flex-wrap:wrap;gap:8px}
+  .acct{font-family:'IBM Plex Mono',monospace;font-size:12px;background:#0e1816;border:1px solid var(--line);
+    color:var(--ink);padding:6px 10px;border-radius:7px;cursor:pointer;transition:.15s}
+  .acct:hover{border-color:var(--teal);color:var(--teal)}
+  .form{padding:48px 44px;display:flex;flex-direction:column;justify-content:center}
+  .form h2{font-size:20px;font-weight:600;margin-bottom:6px}
+  .form .hint{color:var(--muted);font-size:13.5px;margin-bottom:28px}
+  label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:7px;
+    text-transform:uppercase;letter-spacing:.08em}
+  input{width:100%;background:#0e1816;border:1px solid var(--line);color:var(--ink);
+    padding:12px 14px;border-radius:9px;font-family:inherit;font-size:14.5px;margin-bottom:18px;transition:.15s}
+  input:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(22,160,133,.15)}
+  button{width:100%;background:var(--teal);color:#04130f;border:none;padding:13px;
+    border-radius:9px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer;transition:.15s}
+  button:hover{background:#1abc9c}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .err{background:rgba(192,57,43,.12);border:1px solid rgba(192,57,43,.4);color:#ff8a7a;
+    font-size:13px;padding:11px 13px;border-radius:8px;margin-bottom:18px;display:none}
+  @media(max-width:720px){.card{grid-template-columns:1fr}.brand{border-right:none;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <div class="logo">
+        <div class="dot">&#9636;</div>
+        <h1>Automated Food Safety<br>Behaviour Monitoring</h1>
+      </div>
+      <div class="lead">Compliance oversight for food production environments.</div>
+      <div class="sub">Continuous monitoring of handwashing, PPE and allergen-control behaviours with timestamped, audit-ready evidence.</div>
+      <div class="demo">
+        <p>Demo accounts &middot; click to fill</p>
+        <div class="accts">
+          <span class="acct" onclick="fill('manager')">manager</span>
+          <span class="acct" onclick="fill('quality')">quality</span>
+          <span class="acct" onclick="fill('senior')">senior</span>
+          <span class="acct" onclick="fill('auditor')">auditor</span>
+          <span class="acct" onclick="fill('admin')">admin</span>
+        </div>
+      </div>
+    </div>
+    <div class="form">
+      <h2>Sign in</h2>
+      <div class="hint">Enter your credentials to access the dashboard.</div>
+      <div class="err" id="err"></div>
+      <label>Username</label>
+      <input id="username" autocomplete="username" placeholder="manager">
+      <label>Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" onkeydown="if(event.key==='Enter')doLogin()">
+      <button id="btn" onclick="doLogin()">Sign in</button>
+    </div>
+  </div>
+<script>
+function fill(u){document.getElementById('username').value=u;document.getElementById('password').value='password123';}
+async function doLogin(){
+  const btn=document.getElementById('btn'), err=document.getElementById('err');
+  const username=document.getElementById('username').value.trim();
+  const password=document.getElementById('password').value;
+  err.style.display='none'; btn.disabled=true; btn.textContent='Signing in...';
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username,password})});
+    const d=await r.json();
+    if(r.ok){location.href='/';}
+    else{err.textContent=d.error||'Login failed';err.style.display='block';}
+  }catch(e){err.textContent='Cannot reach server';err.style.display='block';}
+  btn.disabled=false; btn.textContent='Sign in';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+{
+  "site_name": "Kitchen Sink 2",
+  "camera_id": "Camera_00",
+  "camera_source": 0,
+  "frame_width": 640,
+  "frame_height": 480,
+  "min_wash_duration": 20,
+  "zones": {
+    "sink_tap": [
+      {
+        "x1": 57,
+        "y1": 274,
+        "x2": 201,
+        "y2": 397
+      }
+    ],
+    "soap_dispenser": [
+      {
+        "x1": 233,
+        "y1": 209,
+        "x2": 379,
+        "y2": 346
+      }
+    ],
+    "dryer": [
+      {
+        "x1": 58,
+        "y1": 84,
+        "x2": 213,
+        "y2": 238
+      }
+    ]
+  }
+}

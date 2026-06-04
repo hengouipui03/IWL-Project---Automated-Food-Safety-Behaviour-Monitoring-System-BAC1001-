@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Food Safety Behaviour Monitoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1719; --panel:#15211f; --panel2:#0e1816; --ink:#e8efe9; --muted:#8aa39a;
+    --line:#243430; --teal:#16a085; --teal2:#1abc9c; --amber:#d68910; --red:#c0392b;
+    --green:#27ae60; --blue:#2980b9;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh}
+  .mono{font-family:'IBM Plex Mono',monospace}
+
+  /* Sidebar */
+  aside{width:248px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;position:fixed;height:100vh;z-index:20}
+  .logo{display:flex;align-items:center;gap:11px;padding:20px 20px;border-bottom:1px solid var(--line)}
+  .logo .dot{width:30px;height:30px;border-radius:8px;background:var(--teal);display:grid;place-items:center;font-size:16px;color:#04130f}
+  .logo h1{font-size:12.5px;font-weight:600;line-height:1.35}
+  nav{flex:1;padding:12px 10px;overflow-y:auto}
+  nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;
+    color:var(--muted);text-decoration:none;font-size:13.5px;font-weight:500;cursor:pointer;margin-bottom:3px;transition:.12s}
+  nav a:hover{background:var(--panel2);color:var(--ink)}
+  nav a.active{background:rgba(22,160,133,.14);color:var(--teal2)}
+  nav a .ico{width:18px;text-align:center;font-size:15px}
+  .navsec{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.14em;padding:14px 14px 6px;opacity:.7}
+  .me{padding:14px 16px;border-top:1px solid var(--line);font-size:12px}
+  .me .name{font-weight:600;display:flex;align-items:center;gap:8px}
+  .me .role{color:var(--muted);font-size:11.5px;margin-top:3px}
+  .me button{margin-top:11px;width:100%;background:var(--panel2);border:1px solid var(--line);
+    color:var(--muted);padding:8px;border-radius:7px;font-family:inherit;font-size:12px;cursor:pointer}
+  .me button:hover{color:var(--ink);border-color:var(--teal)}
+
+  /* Main */
+  main{margin-left:248px;flex:1;padding:30px 36px;max-width:1300px}
+  .head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:14px}
+  .head h2{font-size:23px;font-weight:600;letter-spacing:-.01em}
+  .head .desc{color:var(--muted);font-size:13.5px;margin-top:5px}
+  .controls{display:flex;gap:10px;align-items:center}
+  select,input,textarea{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+    padding:9px 11px;border-radius:8px;font-family:inherit;font-size:13px}
+  select:focus,input:focus,textarea:focus{outline:none;border-color:var(--teal)}
+  .btn{background:var(--teal);color:#04130f;border:none;padding:9px 15px;border-radius:8px;
+    font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:.12s}
+  .btn:hover{background:var(--teal2)}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  .btn.ghost:hover{border-color:var(--teal);color:var(--teal2)}
+  .btn.sm{padding:6px 11px;font-size:12px}
+  .btn.danger{background:var(--red);color:#fff}
+
+  /* Cards / grid */
+  .grid{display:grid;gap:16px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .stat .label{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.1em}
+  .stat .val{font-size:34px;font-weight:600;margin-top:8px;letter-spacing:-.02em}
+  .stat .val small{font-size:15px;color:var(--muted);font-weight:500}
+
+  .banner{padding:13px 16px;border-radius:10px;font-size:13.5px;margin-bottom:18px;display:flex;gap:10px;align-items:center}
+  .banner.ok{background:rgba(39,174,96,.10);border:1px solid rgba(39,174,96,.35);color:#7ee2a8}
+  .banner.warn{background:rgba(214,137,16,.10);border:1px solid rgba(214,137,16,.35);color:#f5c46b}
+  .banner.info{background:rgba(41,128,185,.10);border:1px solid rgba(41,128,185,.35);color:#7ec3ed}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.08em;padding:11px 12px;border-bottom:1px solid var(--line)}
+  td{padding:12px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:var(--panel2)}
+
+  .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;font-family:'IBM Plex Mono',monospace}
+  .pill.compliant{background:rgba(39,174,96,.16);color:#6fdd9b}
+  .pill.non_compliant{background:rgba(192,57,43,.18);color:#ff8a7a}
+  .pill.unable_to_assess{background:rgba(138,163,154,.16);color:#b6c7c0}
+  .pill.indeterminate{background:rgba(214,137,16,.16);color:#f5c46b}
+  .pill.false_positive{background:rgba(41,128,185,.16);color:#7ec3ed}
+  .risk-high{color:#ff8a7a;font-weight:600}
+  .risk-medium{color:#f5c46b;font-weight:600}
+  .risk-low{color:#6fdd9b;font-weight:600}
+  .tag-val{font-size:10px;color:var(--teal2);font-family:'IBM Plex Mono',monospace}
+
+  .bar{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;margin-top:8px}
+  .bar > div{height:100%;background:var(--teal);border-radius:6px}
+
+  .empty{text-align:center;color:var(--muted);padding:40px;font-size:13.5px}
+  h3.section{font-size:15px;font-weight:600;margin:26px 0 14px}
+
+  /* Modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:100%;max-width:520px;padding:26px;max-height:90vh;overflow-y:auto}
+  .modal h3{font-size:17px;font-weight:600;margin-bottom:6px}
+  .modal .msub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  .modal label{display:block;font-size:11.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.07em;margin:14px 0 6px;font-weight:500}
+  .modal input,.modal select,.modal textarea{width:100%}
+  .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}
+  .kv{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .kv span:first-child{color:var(--muted)}
+  .hide{display:none!important}
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--panel);border:1px solid var(--teal);
+    color:var(--ink);padding:13px 18px;border-radius:10px;font-size:13.5px;z-index:99;display:none;box-shadow:0 10px 40px rgba(0,0,0,.4)}
+</style>
+</head>
+<body>
+  <aside>
+    <div class="logo"><div class="dot">&#9636;</div><h1>Food Safety<br>Monitoring System</h1></div>
+    <nav id="nav"></nav>
+    <div class="me">
+      <div class="name"><span id="meName">—</span></div>
+      <div class="role" id="meRole">—</div>
+      <button onclick="logout()">Sign out</button>
+    </div>
+  </aside>
+
+  <main>
+    <div id="view"></div>
+  </main>
+
+  <div class="modal-bg" id="modalBg"><div class="modal" id="modalBox"></div></div>
+  <div class="toast" id="toast"></div>
+
+<script>
+let ME=null, behaviours=['handwashing','ppe','allergen'], sites=[], trendChart=null, cmpChart=null;
+
+const NAV=[
+  {uc:'UC01', id:'dashboard', label:'Daily Dashboard',  ico:'\u25A0'},
+  {uc:'UC02', id:'incidents', label:'Review Incidents', ico:'\u25C9'},
+  {uc:'UC03', id:'trends',    label:'Behaviour Trends',  ico:'\u2197'},
+  {uc:'UC04', id:'reports',   label:'Reports',           ico:'\u25A4'},
+  {uc:'UC06', id:'compare',   label:'Compare Sites',     ico:'\u25A9'},
+  {uc:'UC05', id:'rules',     label:'Rules & Alerts',    ico:'\u2699'},
+  {uc:'UC07', id:'users',     label:'Users & Audit',     ico:'\u26AC'},
+];
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2600);}
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function fmtTime(t){if(!t)return '—';const d=new Date(t);return d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
+function statusLabel(s){return (s||'').replace(/_/g,' ');}
+
+async function api(path,opts){
+  const r=await fetch(path,opts);
+  if(r.status===401){location.href='/login';return null;}
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||'Request failed');
+  return d;
+}
+
+async function boot(){
+  ME=await api('/api/me'); if(!ME)return;
+  document.getElementById('meName').textContent=ME.username;
+  document.getElementById('meRole').textContent=ME.role_label+(ME.site?(' · '+ME.site):'');
+  try{behaviours=await api('/api/behaviours');}catch(e){}
+  try{sites=await api('/api/sites');}catch(e){}
+
+  const nav=document.getElementById('nav');
+  nav.innerHTML='<div class="navsec">Monitoring</div>';
+  NAV.forEach(n=>{
+    if(!ME.access.includes(n.uc))return;
+    const a=document.createElement('a');
+    a.dataset.view=n.id;
+    a.innerHTML=`<span class="ico">${n.ico}</span><span>${n.label}</span>`;
+    a.onclick=()=>go(n.id);
+    nav.appendChild(a);
+  });
+  // first accessible view
+  const first=NAV.find(n=>ME.access.includes(n.uc));
+  go(first?first.id:'dashboard');
+}
+
+function setActive(id){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===id));}
+function go(id){setActive(id);({dashboard:viewDashboard,incidents:viewIncidents,trends:viewTrends,reports:viewReports,compare:viewCompare,rules:viewRules,users:viewUsers}[id])();}
+
+function behaviourOptions(sel){return ['<option value="">All behaviours</option>'].concat(behaviours.map(b=>`<option ${sel===b?'selected':''} value="${b}">${b}</option>`)).join('');}
+
+/* ---------- DASHBOARD ---------- */
+async function viewDashboard(){
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Daily Compliance Dashboard</h2>
+    <div class="desc">Current food-safety compliance status and active alerts.</div></div>
+    <div class="controls"><select id="dDays" onchange="viewDashboard()">
+      <option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option>
+    </select></div></div><div id="dBody"><div class="empty">Loading…</div></div>`;
+  const days=document.getElementById('dDays').value||1;
+  document.getElementById('dDays').value=days;
+  let d;try{d=await api('/api/dashboard?days='+days);}catch(e){document.getElementById('dBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  const banner = d.normal_status
+    ? `<div class="banner ok">&#10003; Normal compliance status — no active alerts in this period.</div>`
+    : `<div class="banner warn">&#9888; ${d.alerts.length} active alert(s) require review.</div>`;
+  let beh=d.by_behaviour.map(b=>`<div class="card"><div class="stat"><div class="label">${b.behaviour}</div>
+    <div class="val">${b.rate}<small>%</small></div></div>
+    <div class="bar"><div style="width:${b.rate}%"></div></div>
+    <div class="desc" style="margin-top:8px">${b.compliant}/${b.total} compliant</div></div>`).join('')
+    || `<div class="empty">No behaviour data yet.</div>`;
+  let alerts = d.alerts.length ? `<table><thead><tr><th>Time</th><th>Behaviour</th><th>Site</th><th>Camera</th><th>Risk</th><th></th></tr></thead><tbody>`+
+    d.alerts.map(a=>`<tr><td class="mono">${fmtTime(a.timestamp)}</td><td>${a.behaviour_type}</td>
+      <td>${esc(a.site)}</td><td class="mono">${esc(a.camera||'—')}</td>
+      <td class="risk-${a.risk_level}">${a.risk_level}</td>
+      <td>${ME.access.includes('UC02')?`<button class="btn sm ghost" onclick="openIncident(${a.id})">Review</button>`:''}</td></tr>`).join('')
+    +`</tbody></table>` : `<div class="empty">No active alerts.</div>`;
+  document.getElementById('dBody').innerHTML=`${banner}
+    <div class="grid g4">
+      <div class="card stat"><div class="label">Total Events</div><div class="val">${d.total_events}</div></div>
+      <div class="card stat"><div class="label">Compliant</div><div class="val" style="color:var(--green)">${d.compliant}</div></div>
+      <div class="card stat"><div class="label">Non-Compliant</div><div class="val" style="color:var(--red)">${d.non_compliant}</div></div>
+      <div class="card stat"><div class="label">Compliance Rate</div><div class="val">${d.compliance_rate}<small>%</small></div></div>
+    </div>
+    <h3 class="section">By Behaviour</h3><div class="grid g3">${beh}</div>
+    <h3 class="section">Active Alerts</h3><div class="card">${alerts}</div>`;
+}
+
+/* ---------- INCIDENTS ---------- */
+async function viewIncidents(){
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Review &amp; Validate Incidents</h2>
+    <div class="desc">Inspect detected events, validate findings and annotate for audit.${ME.read_only?' <b>(read-only)</b>':''}</div></div>
+    <div class="controls">
+      <select id="fStatus" onchange="loadIncidents()">
+        <option value="">All statuses</option><option value="compliant">Compliant</option>
+        <option value="non_compliant">Non-compliant</option><option value="unable_to_assess">Unable to assess</option>
+      </select>
+      <select id="fBeh" onchange="loadIncidents()">${behaviourOptions('')}</select>
+    </div></div><div class="card" id="incBody"><div class="empty">Loading…</div></div>`;
+  loadIncidents();
+}
+async function loadIncidents(){
+  const s=document.getElementById('fStatus').value, b=document.getElementById('fBeh').value;
+  let rows;try{rows=await api(`/api/incidents?status=${s}&behaviour=${b}&limit=200`);}catch(e){document.getElementById('incBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  if(!rows.length){document.getElementById('incBody').innerHTML=`<div class="empty">No incidents found.</div>`;return;}
+  document.getElementById('incBody').innerHTML=`<table><thead><tr><th>Time</th><th>Behaviour</th><th>Status</th><th>Risk</th><th>Conf.</th><th>Site</th><th>Validated</th><th></th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td class="mono">${fmtTime(r.timestamp)}</td><td>${r.behaviour_type}</td>
+      <td><span class="pill ${r.compliance_status}">${statusLabel(r.compliance_status)}</span></td>
+      <td class="risk-${r.risk_level}">${r.risk_level||'—'}</td>
+      <td class="mono">${r.confidence!=null?(r.confidence*100).toFixed(0)+'%':'—'}</td>
+      <td>${esc(r.site_name)}</td>
+      <td>${r.validated?`<span class="tag-val">&#10003; ${esc(r.validator_name||'')}</span>`:'—'}</td>
+      <td><button class="btn sm ghost" onclick="openIncident(${r.id})">${ME.read_only?'View':'Review'}</button></td></tr>`).join('')
+    +`</tbody></table>`;
+}
+async function openIncident(id){
+  let r;try{r=await api('/api/incidents/'+id);}catch(e){toast(e.message);return;}
+  const det=r.details||{};
+  const steps=(det.steps||[]).join(', ')||'—';
+  const ro=ME.read_only;
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>Incident #${r.id}</h3><div class="msub">${r.behaviour_type} · ${esc(r.site_name)} · ${esc(r.camera_code||'—')}</div>
+    <div class="kv"><span>Detected</span><span class="mono">${fmtTime(r.timestamp)}</span></div>
+    <div class="kv"><span>Status</span><span class="pill ${r.compliance_status}">${statusLabel(r.compliance_status)}</span></div>
+    <div class="kv"><span>Risk level</span><span class="risk-${r.risk_level}">${r.risk_level||'—'}</span></div>
+    <div class="kv"><span>Confidence</span><span class="mono">${r.confidence!=null?(r.confidence*100).toFixed(0)+'%':'—'}</span></div>
+    <div class="kv"><span>Detection result</span><span class="mono">${esc(det.result||'—')}</span></div>
+    <div class="kv"><span>Steps completed</span><span class="mono">${esc(steps)}</span></div>
+    <div class="kv"><span>Rub duration</span><span class="mono">${det.rub_duration!=null?det.rub_duration+'s':'—'}</span></div>
+    ${r.validated?`<div class="kv"><span>Validated by</span><span>${esc(r.validator_name||'')} · ${fmtTime(r.validated_at)}</span></div>
+      <div class="kv"><span>Reason</span><span>${esc(r.validation_reason||'—')}</span></div>
+      <div class="kv"><span>Notes</span><span>${esc(r.validation_notes||'—')}</span></div>`:''}
+    ${ro?`<div class="banner info" style="margin-top:18px">Read-only access — auditors cannot modify incidents.</div>
+       <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`
+    :`<label>Reclassify status</label>
+      <select id="vStatus">
+        <option value="non_compliant">Non-compliant</option>
+        <option value="compliant">Compliant</option>
+        <option value="indeterminate">Indeterminate</option>
+        <option value="false_positive">False positive</option>
+      </select>
+      <label>Reclassification reason (required)</label>
+      <input id="vReason" placeholder="e.g. Confirmed via footage / mis-detection">
+      <label>Notes (optional)</label>
+      <textarea id="vNotes" rows="2" placeholder="Additional annotation"></textarea>
+      <div class="modal-actions">
+        <button class="btn ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn" onclick="submitValidation(${r.id})">Save validation</button>
+      </div>`}`;
+  if(!ro){const sel=document.getElementById('vStatus');if(['compliant','non_compliant'].includes(r.compliance_status))sel.value=r.compliance_status;}
+  showModal();
+}
+async function submitValidation(id){
+  const status=document.getElementById('vStatus').value;
+  const reason=document.getElementById('vReason').value.trim();
+  const notes=document.getElementById('vNotes').value;
+  if(!reason){toast('A reclassification reason is required');return;}
+  try{await api('/api/incidents/'+id+'/validate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status,reason,notes})});}catch(e){toast(e.message);return;}
+  closeModal();toast('Incident validated');loadIncidents();
+}
+
+/* ---------- TRENDS ---------- */
+async function viewTrends(){
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Behaviour Trends</h2>
+    <div class="desc">Aggregated compliance over time. Filter by period and behaviour.</div></div>
+    <div class="controls">
+      <select id="tDays" onchange="loadTrends()"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select>
+      <select id="tBeh" onchange="loadTrends()">${behaviourOptions('')}</select>
+    </div></div>
+    <div id="tBanner"></div>
+    <div class="card"><canvas id="trendCanvas" height="92"></canvas></div>
+    <div id="tTable"></div>`;
+  loadTrends();
+}
+async function loadTrends(){
+  const days=document.getElementById('tDays').value, b=document.getElementById('tBeh').value;
+  let d;try{d=await api(`/api/trends?days=${days}&behaviour=${b}`);}catch(e){document.getElementById('tBanner').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  let bn='';
+  if(d.incomplete)bn+=`<div class="banner warn">&#9888; ${d.incomplete_msg}</div>`;
+  if(d.stable)bn+=`<div class="banner ok">&#10003; ${d.stable_msg}</div>`;
+  document.getElementById('tBanner').innerHTML=bn;
+  const labels=d.data.map(x=>x.date), rates=d.data.map(x=>x.rate);
+  if(trendChart)trendChart.destroy();
+  trendChart=new Chart(document.getElementById('trendCanvas'),{type:'line',
+    data:{labels,datasets:[{label:'Compliance rate %',data:rates,borderColor:'#16a085',
+      backgroundColor:'rgba(22,160,133,.15)',fill:true,tension:.3,pointRadius:3}]},
+    options:{plugins:{legend:{labels:{color:'#8aa39a'}}},scales:{
+      y:{min:0,max:100,grid:{color:'#243430'},ticks:{color:'#8aa39a'}},
+      x:{grid:{color:'#243430'},ticks:{color:'#8aa39a'}}}}});
+  document.getElementById('tTable').innerHTML = d.data.length?`<h3 class="section">Daily breakdown</h3><div class="card"><table>
+    <thead><tr><th>Date</th><th>Compliant</th><th>Non-compliant</th><th>Rate</th></tr></thead><tbody>`+
+    d.data.map(x=>`<tr><td class="mono">${x.date}</td><td>${x.compliant}</td><td>${x.non_compliant}</td><td>${x.rate}%</td></tr>`).join('')
+    +`</tbody></table></div>`:'';
+}
+
+/* ---------- REPORTS ---------- */
+async function viewReports(){
+  const today=new Date().toISOString().slice(0,10);
+  const monthAgo=new Date(Date.now()-30*864e5).toISOString().slice(0,10);
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Compliance Reports</h2>
+    <div class="desc">Generate a summary report for audit or management review.</div></div></div>
+    <div class="card">
+      <div class="grid g4" style="align-items:end">
+        <div><label style="font-size:11.5px;color:var(--muted)">Start date</label><input type="date" id="rStart" value="${monthAgo}"></div>
+        <div><label style="font-size:11.5px;color:var(--muted)">End date</label><input type="date" id="rEnd" value="${today}"></div>
+        <div><label style="font-size:11.5px;color:var(--muted)">Behaviour</label><select id="rBeh">${behaviourOptions('')}</select></div>
+        <div><button class="btn" onclick="genReport()">Generate report</button></div>
+      </div>
+    </div><div id="rOut"></div>`;
+}
+async function genReport(){
+  const body={start_date:document.getElementById('rStart').value,end_date:document.getElementById('rEnd').value,behaviour:document.getElementById('rBeh').value};
+  let d;try{d=await api('/api/reports',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}catch(e){document.getElementById('rOut').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  const beh=Object.entries(d.by_behaviour).map(([k,vv])=>`<tr><td>${k}</td><td>${vv.total}</td><td>${vv.compliant}</td>
+    <td>${vv.total?Math.round(vv.compliant/vv.total*100):0}%</td></tr>`).join('')||`<tr><td colspan="4" class="empty">No data</td></tr>`;
+  document.getElementById('rOut').innerHTML=`
+    ${d.withheld?`<div class="banner info" style="margin-top:18px">&#9432; ${d.withheld_msg}</div>`:''}
+    <h3 class="section">Report · ${esc(d.period)}</h3>
+    <div class="grid g4">
+      <div class="card stat"><div class="label">Total Events</div><div class="val">${d.total_events}</div></div>
+      <div class="card stat"><div class="label">Compliant</div><div class="val" style="color:var(--green)">${d.compliant}</div></div>
+      <div class="card stat"><div class="label">Non-Compliant</div><div class="val" style="color:var(--red)">${d.non_compliant}</div></div>
+      <div class="card stat"><div class="label">Rate</div><div class="val">${d.compliance_rate}<small>%</small></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card"><h3 class="section" style="margin-top:0">By behaviour</h3><table><thead><tr><th>Behaviour</th><th>Total</th><th>Compliant</th><th>Rate</th></tr></thead><tbody>${beh}</tbody></table></div>
+      <div class="card"><h3 class="section" style="margin-top:0">Risk distribution</h3><table><tbody>
+        <tr><td class="risk-high">High</td><td>${d.risk_distribution.high}</td></tr>
+        <tr><td class="risk-medium">Medium</td><td>${d.risk_distribution.medium}</td></tr>
+        <tr><td class="risk-low">Low</td><td>${d.risk_distribution.low}</td></tr>
+      </tbody></table></div>
+    </div>
+    <div class="desc" style="margin-top:14px">Generated by ${esc(d.generated_by)} · ${fmtTime(d.generated_at)} ·
+      <button class="btn sm ghost" onclick="window.print()">Print / export PDF</button></div>`;
+}
+
+/* ---------- COMPARE ---------- */
+async function viewCompare(){
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Compare Compliance Across Sites</h2>
+    <div class="desc">Benchmark performance across sites to inform resource allocation.</div></div>
+    <div class="controls">
+      <select id="cDays" onchange="loadCompare()"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select>
+      <select id="cBeh" onchange="loadCompare()">${behaviourOptions('')}</select>
+    </div></div>
+    <div id="cBanner"></div>
+    <div class="card"><canvas id="cmpCanvas" height="90"></canvas></div>
+    <div id="cTable"></div>`;
+  loadCompare();
+}
+async function loadCompare(){
+  const days=document.getElementById('cDays').value,b=document.getElementById('cBeh').value;
+  let d;try{d=await api(`/api/compare?days=${days}&behaviour=${b}`);}catch(e){document.getElementById('cBanner').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  document.getElementById('cBanner').innerHTML=d.incomplete?`<div class="banner warn">&#9888; ${d.incomplete_msg}</div>`:'';
+  const labels=d.sites.map(s=>s.site),rates=d.sites.map(s=>s.rate);
+  if(cmpChart)cmpChart.destroy();
+  cmpChart=new Chart(document.getElementById('cmpCanvas'),{type:'bar',
+    data:{labels,datasets:[{label:'Compliance rate %',data:rates,backgroundColor:'#16a085',borderRadius:6}]},
+    options:{plugins:{legend:{labels:{color:'#8aa39a'}}},scales:{
+      y:{min:0,max:100,grid:{color:'#243430'},ticks:{color:'#8aa39a'}},
+      x:{grid:{color:'#243430'},ticks:{color:'#8aa39a'}}}}});
+  document.getElementById('cTable').innerHTML=`<h3 class="section">Site detail</h3><div class="card"><table>
+    <thead><tr><th>Site</th><th>Location</th><th>Events</th><th>Compliant</th><th>Rate</th></tr></thead><tbody>`+
+    d.sites.map(s=>`<tr><td>${esc(s.site)}</td><td>${esc(s.location||'—')}</td><td>${s.total}</td><td>${s.compliant}</td><td>${s.rate}%</td></tr>`).join('')
+    +`</tbody></table></div>`;
+}
+
+/* ---------- RULES ---------- */
+async function viewRules(){
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Monitoring Rules &amp; Alerts</h2>
+    <div class="desc">Configure monitored behaviours, alert thresholds and detection sensitivity.</div></div>
+    <div class="controls"><button class="btn" onclick="openRule()">+ New rule</button></div></div>
+    <div class="card" id="rulesBody"><div class="empty">Loading…</div></div>`;
+  loadRules();
+}
+async function loadRules(){
+  let rows;try{rows=await api('/api/rules');}catch(e){document.getElementById('rulesBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  if(!rows.length){document.getElementById('rulesBody').innerHTML=`<div class="empty">No rules configured.</div>`;return;}
+  document.getElementById('rulesBody').innerHTML=`<table><thead><tr><th>Rule</th><th>Behaviour</th><th>Site</th><th>Alert thresh.</th><th>Conf. thresh.</th><th>Status</th><th></th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td>${esc(r.rule_name)}<div class="desc">${esc(r.description||'')}</div></td>
+      <td>${r.behaviour_type}</td><td>${esc(r.site_name||'All sites')}</td>
+      <td class="mono">${r.alert_threshold}</td><td class="mono">${r.confidence_threshold}</td>
+      <td>${r.enabled?'<span class="pill compliant">enabled</span>':'<span class="pill unable_to_assess">disabled</span>'}</td>
+      <td><button class="btn sm ghost" onclick='openRule(${JSON.stringify(r)})'>Edit</button>
+          <button class="btn sm danger" onclick="delRule(${r.id})">Del</button></td></tr>`).join('')
+    +`</tbody></table>`;
+}
+function openRule(r){
+  r=r||{};
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>${r.id?'Edit':'New'} rule</h3><div class="msub">Define a monitored behaviour and its alert thresholds.</div>
+    <label>Rule name</label><input id="ruName" value="${esc(r.rule_name||'')}">
+    <label>Behaviour</label><select id="ruBeh">${behaviours.map(b=>`<option ${r.behaviour_type===b?'selected':''}>${b}</option>`).join('')}</select>
+    <label>Site</label><select id="ruSite"><option value="">All sites</option>${sites.map(s=>`<option value="${s.id}" ${r.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
+    <label>Description</label><textarea id="ruDesc" rows="2">${esc(r.description||'')}</textarea>
+    <label>Alert threshold (0–100) — risk level at/above which an alert fires</label><input id="ruThresh" type="number" min="0" max="100" value="${r.alert_threshold!=null?r.alert_threshold:50}">
+    <label>Confidence threshold (0–1) — below this, events are "unable to assess"</label><input id="ruConf" type="number" min="0" max="1" step="0.05" value="${r.confidence_threshold!=null?r.confidence_threshold:0.5}">
+    <label><input type="checkbox" id="ruEnabled" ${r.enabled!==0?'checked':''} style="width:auto;margin-right:8px">Enabled</label>
+    <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveRule(${r.id||0})">Save</button></div>`;
+  showModal();
+}
+async function saveRule(id){
+  const body={rule_name:document.getElementById('ruName').value.trim(),
+    behaviour_type:document.getElementById('ruBeh').value,
+    site_id:document.getElementById('ruSite').value||null,
+    description:document.getElementById('ruDesc').value,
+    alert_threshold:document.getElementById('ruThresh').value,
+    confidence_threshold:document.getElementById('ruConf').value,
+    enabled:document.getElementById('ruEnabled').checked};
+  if(!body.rule_name){toast('Rule name required');return;}
+  try{await api(id?'/api/rules/'+id:'/api/rules',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+  catch(e){toast(e.message);return;}
+  closeModal();toast('Rule saved');loadRules();
+}
+async function delRule(id){if(!confirm('Delete this rule?'))return;try{await api('/api/rules/'+id,{method:'DELETE'});}catch(e){toast(e.message);return;}toast('Rule deleted');loadRules();}
+
+/* ---------- USERS ---------- */
+async function viewUsers(){
+  const v=document.getElementById('view');
+  v.innerHTML=`<div class="head"><div><h2>Users &amp; Audit Trail</h2>
+    <div class="desc">Manage accounts and role-based access. All changes are logged.</div></div>
+    <div class="controls"><button class="btn" onclick="openUser()">+ New user</button></div></div>
+    <div class="card" id="usersBody"><div class="empty">Loading…</div></div>
+    <h3 class="section">Audit Log</h3><div class="card" id="auditBody"><div class="empty">Loading…</div></div>`;
+  loadUsers();loadAudit();
+}
+async function loadUsers(){
+  let rows;try{rows=await api('/api/users');}catch(e){document.getElementById('usersBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  document.getElementById('usersBody').innerHTML=`<table><thead><tr><th>Username</th><th>Role</th><th>Site</th><th>Created</th><th></th></tr></thead><tbody>`+
+    rows.map(u=>`<tr><td class="mono">${esc(u.username)}</td><td>${esc(u.role_label)}</td>
+      <td>${esc(u.site_name||'—')}</td><td class="mono">${fmtTime(u.created_at)}</td>
+      <td><button class="btn sm ghost" onclick='openUser(${JSON.stringify(u)})'>Edit</button>
+          <button class="btn sm danger" onclick="delUser(${u.id},'${esc(u.username)}')">Del</button></td></tr>`).join('')
+    +`</tbody></table>`;
+}
+async function loadAudit(){
+  let rows;try{rows=await api('/api/audit-logs');}catch(e){return;}
+  document.getElementById('auditBody').innerHTML=rows.length?`<table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody>`+
+    rows.map(a=>`<tr><td class="mono">${fmtTime(a.timestamp)}</td><td class="mono">${esc(a.username||'—')}</td>
+      <td>${esc(a.action)}</td><td>${esc(a.target_type||'—')}${a.target_id?(' #'+a.target_id):''}</td>
+      <td class="desc">${esc(a.details||'')}</td></tr>`).join('')+`</tbody></table>`:`<div class="empty">No audit entries.</div>`;
+}
+const ROLES=[['manager','Site / Production Manager'],['quality_team','Quality & Food Safety Team'],
+  ['senior_manager','Senior / Regional Manager'],['auditor','Auditor / Inspector'],['admin','System Administrator']];
+function openUser(u){
+  u=u||{};
+  const box=document.getElementById('modalBox');
+  box.innerHTML=`<h3>${u.id?'Edit':'New'} user</h3><div class="msub">Assign a role and (optionally) a site.</div>
+    <label>Username</label><input id="uName" value="${esc(u.username||'')}" ${u.id?'disabled':''}>
+    <label>${u.id?'New password (leave blank to keep)':'Password'}</label><input id="uPass" type="password" placeholder="${u.id?'unchanged':'password'}">
+    <label>Role</label><select id="uRole">${ROLES.map(([k,l])=>`<option value="${k}" ${u.role===k?'selected':''}>${l}</option>`).join('')}</select>
+    <label>Site</label><select id="uSite"><option value="">— none / all —</option>${sites.map(s=>`<option value="${s.id}" ${u.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
+    <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveUser(${u.id||0})">Save</button></div>`;
+  showModal();
+}
+async function saveUser(id){
+  const body={username:document.getElementById('uName').value.trim(),
+    password:document.getElementById('uPass').value,
+    role:document.getElementById('uRole').value,
+    site_id:document.getElementById('uSite').value||null};
+  try{await api(id?'/api/users/'+id:'/api/users',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+  catch(e){toast(e.message);return;}
+  closeModal();toast('User saved');loadUsers();loadAudit();
+}
+async function delUser(id,name){
+  if(!confirm('Remove user "'+name+'"? This account may be in use.'))return;
+  try{await api('/api/users/'+id+'?confirm=true',{method:'DELETE'});}catch(e){toast(e.message);return;}
+  toast('User removed');loadUsers();loadAudit();
+}
+
+/* ---------- modal + logout ---------- */
+function showModal(){document.getElementById('modalBg').classList.add('show');}
+function closeModal(){document.getElementById('modalBg').classList.remove('show');}
+document.getElementById('modalBg').onclick=e=>{if(e.target.id==='modalBg')closeModal();};
+async function logout(){await api('/api/logout',{method:'POST'});location.href='/login';}
+
+boot();
+</script>
+</body>
+</html>
