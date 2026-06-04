@@ -1,4 +1,5 @@
 import cv2
+import argparse
 import json
 import time
 from collections import deque
@@ -6,13 +7,31 @@ from ultralytics import YOLO
 from hand_analysis import HandAnalyser
 
 # ── Load site config ─────────────────────────────────────────────
-with open("site_config.json", "r") as f:
+def parse_camera_source(source):
+    if isinstance(source, str) and source.isdigit():
+        return int(source)
+    return source
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", default="site_config.json")
+args = parser.parse_args()
+
+config_path = args.config
+
+with open(config_path, "r") as f:
     config = json.load(f)
 
 zones = config["zones"]
 site_name = config["site_name"]
 min_wash_duration = config["min_wash_duration"]
+camera_id = config.get("camera_id", site_name)
+camera_source = parse_camera_source(config.get("camera_source", 0))
+frame_width = config.get("frame_width", 480)
+frame_height = config.get("frame_height", 480)
 
+print(f"Config: {config_path}")
+print(f"Camera ID: {camera_id}")
+print(f"Camera source: {camera_source}")
 print(f"Site: {site_name}")
 print(f"Min wash duration: {min_wash_duration}s")
 print(f"Zones: { {k: len(v) for k, v in zones.items()} }")
@@ -34,14 +53,17 @@ RIGHT_WRIST = 10
 analyser = HandAnalyser()
 
 # ── Webcam ───────────────────────────────────────────────────────
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+if isinstance(camera_source, int):
+    cap = cv2.VideoCapture(camera_source, cv2.CAP_DSHOW)
+else:
+    cap = cv2.VideoCapture(camera_source)
 
 if not cap.isOpened():
-    print("Error: Could not open webcam")
+    print(f"Error: Could not open camera source {camera_source}")
     exit()
 
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
 
 # ── Window setup ─────────────────────────────────────────────────
 cv2.namedWindow("Handwash Detection", cv2.WINDOW_NORMAL)
@@ -65,6 +87,7 @@ last_rub_time = 0.0
 dry_start = 0.0
 dry_duration = 0.0
 sink_entry_time = 0.0
+recontamination_contact_start = 0.0
 steps_completed = []
 last_seen = 0.0
 result_display = ""
@@ -90,6 +113,9 @@ KEYPOINT_CONFIDENCE = 0.3
 SOAP_GRACE_PERIOD = 4.0
 ASSUMED_SOAP_DURATION = 10.0
 RUB_PAUSE_TOLERANCE = 2.0
+RECONTAMINATION_MONITOR_TIME = 8.0
+RECONTAMINATION_CONFIRM_TIME = 0.8
+RECONTAMINATION_LEAVE_TIMEOUT = 1.0
 
 # ── Frame skip for performance ───────────────────────────────────
 frame_count = 0
@@ -173,7 +199,7 @@ def conclude_session():
 
 def reset_session():
     global state, session_start, rub_start, rub_duration, last_rub_time
-    global dry_start, dry_duration, sink_entry_time
+    global dry_start, dry_duration, sink_entry_time, recontamination_contact_start
     global steps_completed, prev_lw, prev_rw
     global result_display, result_color, rub_confirm_count, technique_summary
 
@@ -185,6 +211,7 @@ def reset_session():
     dry_start = 0.0
     dry_duration = 0.0
     sink_entry_time = 0.0
+    recontamination_contact_start = 0.0
     steps_completed = []
     prev_lw = (0, 0)
     prev_rw = (0, 0)
@@ -221,31 +248,45 @@ while True:
     person_detected = keypoints is not None and len(keypoints) > 0
 
     if person_detected:
-        last_seen = now
         kp = keypoints.xy[0]
         kp_conf = keypoints.conf[0]
 
         lw_conf = float(kp_conf[LEFT_WRIST])
         rw_conf = float(kp_conf[RIGHT_WRIST])
 
-        raw_lw = (int(kp[LEFT_WRIST][0]), int(kp[LEFT_WRIST][1])) if lw_conf > KEYPOINT_CONFIDENCE else prev_lw
-        raw_rw = (int(kp[RIGHT_WRIST][0]), int(kp[RIGHT_WRIST][1])) if rw_conf > KEYPOINT_CONFIDENCE else prev_rw
+        lw_visible = lw_conf > KEYPOINT_CONFIDENCE
+        rw_visible = rw_conf > KEYPOINT_CONFIDENCE
 
-        lw_px = smooth_wrist(lw_history, raw_lw)
-        rw_px = smooth_wrist(rw_history, raw_rw)
+        raw_lw = (int(kp[LEFT_WRIST][0]), int(kp[LEFT_WRIST][1])) if lw_visible else None
+        raw_rw = (int(kp[RIGHT_WRIST][0]), int(kp[RIGHT_WRIST][1])) if rw_visible else None
 
-        cv2.circle(frame, lw_px, 8, (0, 255, 255), -1)
-        cv2.circle(frame, rw_px, 8, (0, 165, 255), -1)
+        if raw_lw is not None:
+            lw_px = smooth_wrist(lw_history, raw_lw)
+            cv2.circle(frame, lw_px, 8, (0, 255, 255), -1)
+        else:
+            lw_px = None
+            lw_history.clear()
 
-        in_sink_lw = wrist_in_zones(lw_px[0], lw_px[1], "sink_tap")
-        in_sink_rw = wrist_in_zones(rw_px[0], rw_px[1], "sink_tap")
+        if raw_rw is not None:
+            rw_px = smooth_wrist(rw_history, raw_rw)
+            cv2.circle(frame, rw_px, 8, (0, 165, 255), -1)
+        else:
+            rw_px = None
+            rw_history.clear()
+
+        valid_wrist_detected = lw_px is not None or rw_px is not None
+        if valid_wrist_detected:
+            last_seen = now
+
+        in_sink_lw = lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "sink_tap")
+        in_sink_rw = rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "sink_tap")
         in_sink = in_sink_lw and in_sink_rw
-        in_soap = (wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser") or
-                   wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser"))
-        in_dry = (wrist_in_zones(lw_px[0], lw_px[1], "dryer") or
-                  wrist_in_zones(rw_px[0], rw_px[1], "dryer"))
+        in_soap = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser")) or
+                   (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser")))
+        in_dry = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")) or
+                  (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")))
 
-        moving = wrists_moving(lw_px, rw_px)
+        moving = wrists_moving(lw_px, rw_px) if lw_px is not None and rw_px is not None else False
         rubbing = in_sink and moving
 
         # ── State machine ────────────────────────────────────────
@@ -323,21 +364,47 @@ while True:
                 log_step("dry")
                 state = RECONTAMINATION
                 result_timer = now
+                recontamination_contact_start = 0.0
                 print("Drying complete — monitoring for recontamination...")
 
         elif state == RECONTAMINATION:
-            if in_sink:
-                print("  ⚠ Recontamination detected — wrist touched tap after drying")
-                log_step("recontamination")
-            if now - result_timer > 3.0:
+            recontamination_contact = in_sink_lw or in_sink_rw
+
+            if recontamination_contact:
+                if recontamination_contact_start == 0.0:
+                    recontamination_contact_start = now
+                if (now - recontamination_contact_start) >= RECONTAMINATION_CONFIRM_TIME:
+                    if "recontamination" not in steps_completed:
+                        print("  ⚠ Possible recontamination detected — wrist stayed near tap after drying")
+                        log_step("recontamination")
+            else:
+                recontamination_contact_start = 0.0
+
+            if not valid_wrist_detected and (now - last_seen) > RECONTAMINATION_LEAVE_TIMEOUT:
+                conclude_session()
+            elif now - result_timer > RECONTAMINATION_MONITOR_TIME:
                 conclude_session()
 
         elif state == COMPLETE:
             if now - result_timer > RESULT_DISPLAY_TIME:
                 reset_session()
 
-        prev_lw = lw_px
-        prev_rw = rw_px
+        if lw_px is not None:
+            prev_lw = lw_px
+        if rw_px is not None:
+            prev_rw = rw_px
+
+        if not valid_wrist_detected and state not in (IDLE, COMPLETE, RECONTAMINATION):
+            if now - last_seen > NO_PERSON_TIMEOUT:
+                print("Person left early — ending session")
+                if steps_completed:
+                    conclude_session()
+                else:
+                    result_display = "MISSED"
+                    result_color = (0, 165, 255)
+                    result_timer = now
+                    state = COMPLETE
+                    print("MISSED — no steps completed")
 
     else:
         if state not in (IDLE, COMPLETE):

@@ -1,5 +1,7 @@
 import cv2
+import argparse
 import json
+import os
 
 # ── Zone types ───────────────────────────────────────────────────
 ZONE_TYPES = {
@@ -8,8 +10,31 @@ ZONE_TYPES = {
     "3": {"key": "dryer",          "label": "DRYER / TOWEL",   "color": (255, 0, 255)},
 }
 
+def parse_camera_source(source):
+    if isinstance(source, str) and source.isdigit():
+        return int(source)
+    return source
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", default="site_config.json")
+parser.add_argument("--camera-source", default=None)
+args = parser.parse_args()
+
+config_path = args.config
+existing_config = {}
+
+if os.path.exists(config_path):
+    with open(config_path, "r") as f:
+        existing_config = json.load(f)
+
+camera_source = parse_camera_source(args.camera_source if args.camera_source is not None else existing_config.get("camera_source", 0))
+frame_width = existing_config.get("frame_width", 640)
+frame_height = existing_config.get("frame_height", 480)
+site_name = existing_config.get("site_name", "")
+camera_id = existing_config.get("camera_id", "")
+
 # ── State ────────────────────────────────────────────────────────
-zones       = {"sink_tap": [], "soap_dispenser": [], "dryer": []}
+zones       = existing_config.get("zones", {"sink_tap": [], "soap_dispenser": [], "dryer": []})
 drawing     = False
 start_x     = start_y = 0
 temp_end_x  = temp_end_y = 0
@@ -42,16 +67,21 @@ def mouse_callback(event, x, y, flags, param):
             print(f"✔ {active_type} #{len(zones[active_type])} saved: ({x1},{y1}) → ({x2},{y2})")
 
 # ── Webcam setup ─────────────────────────────────────────────────
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+if isinstance(camera_source, int):
+    cap = cv2.VideoCapture(camera_source, cv2.CAP_DSHOW)
+else:
+    cap = cv2.VideoCapture(camera_source)
 
 if not cap.isOpened():
-    print("Error: Could not open webcam")
+    print(f"Error: Could not open camera source {camera_source}")
     exit()
 
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
 
 print("\n=== ZONE SETUP ===")
+print(f"Config: {config_path}")
+print(f"Camera source: {camera_source}")
 print("  1 — Draw SINK / TAP zone")
 print("  2 — Draw SOAP DISPENSER zone")
 print("  3 — Draw DRYER / TOWEL zone")
@@ -141,17 +171,38 @@ while True:
 if save_flag:
     cap.release()
     cv2.destroyAllWindows()
-    site_name = input("Enter site name (e.g. Factory A - Sink Row 1): ").strip()
+
+    site_prompt = f"Enter site name (e.g. Factory A - Sink Row 1){f' [{site_name}]' if site_name else ''}: "
+    new_site_name = input(site_prompt).strip()
+    if new_site_name:
+        site_name = new_site_name
+    if not site_name:
+        site_name = "Unnamed Site"
+
+    camera_prompt = f"Enter camera ID (e.g. camera_01){f' [{camera_id}]' if camera_id else ''}: "
+    new_camera_id = input(camera_prompt).strip()
+    if new_camera_id:
+        camera_id = new_camera_id
+    if not camera_id:
+        camera_id = site_name
+
     config = {
         "site_name":         site_name,
-        "frame_width":       640,
-        "frame_height":      480,
+        "camera_id":         camera_id,
+        "camera_source":     camera_source,
+        "frame_width":       frame_width,
+        "frame_height":      frame_height,
         "min_wash_duration": 20,
         "zones":             zones
     }
-    with open("site_config.json", "w") as f:
+
+    config_dir = os.path.dirname(config_path)
+    if config_dir:
+        os.makedirs(config_dir, exist_ok=True)
+
+    with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
-    print(f"\n✔ Saved to site_config.json")
+    print(f"\n✔ Saved to {config_path}")
     for k, v in zones.items():
         if v:
             print(f"  {k}: {len(v)} zone(s)")
