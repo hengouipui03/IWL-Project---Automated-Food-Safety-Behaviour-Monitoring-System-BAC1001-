@@ -468,6 +468,10 @@ def list_incidents():
         q += ' AND i.compliance_status = ?'; params.append(status)
     if behaviour:
         q += ' AND i.behaviour_type = ?'; params.append(behaviour)
+    #additional camera filter for dashboard
+    camera = request.args.get('camera')
+    if camera:
+        q += ' AND c.camera_id = ?'; params.append(camera)
     q += ' ORDER BY i.timestamp DESC LIMIT ?'; params.append(limit)
 
     conn = get_db()
@@ -855,6 +859,21 @@ def api_audit():
 def api_behaviours():
     return jsonify(BEHAVIOUR_TYPES)
 
+#added for multiple camera support - list cameras for dropdowns etc
+@app.route('/api/cameras')
+@login_required
+def api_cameras():
+    u = current_user()
+    conn = get_db()
+    if u['site_id']:
+        rows = conn.execute(
+            'SELECT * FROM cameras WHERE site_id = ? ORDER BY camera_id',
+            (u['site_id'],)
+        ).fetchall()
+    else:
+        rows = conn.execute('SELECT * FROM cameras ORDER BY camera_id').fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
 if __name__ == '__main__':
     init_db()

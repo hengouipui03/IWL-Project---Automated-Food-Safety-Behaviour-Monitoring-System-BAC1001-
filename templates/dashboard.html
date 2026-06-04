@@ -132,7 +132,7 @@
   <div class="toast" id="toast"></div>
 
 <script>
-let ME=null, behaviours=['handwashing','ppe','allergen'], sites=[], trendChart=null, cmpChart=null;
+let ME=null, behaviours=['handwashing','ppe','allergen'], sites=[], cameras=[], trendChart=null, cmpChart=null;
 
 const NAV=[
   {uc:'UC01', id:'dashboard', label:'Daily Dashboard',  ico:'\u25A0'},
@@ -177,6 +177,9 @@ async function boot(){
   // first accessible view
   const first=NAV.find(n=>ME.access.includes(n.uc));
   go(first?first.id:'dashboard');
+
+  //cameras
+  try{cameras=await api('/api/cameras');}catch(e){}
 }
 
 function setActive(id){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===id));}
@@ -191,7 +194,12 @@ async function viewDashboard(){
     <div class="desc">Current food-safety compliance status and active alerts.</div></div>
     <div class="controls"><select id="dDays" onchange="viewDashboard()">
       <option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option>
-    </select></div></div><div id="dBody"><div class="empty">Loading…</div></div>`;
+    </select>
+    <select id="dCam" onchange="viewDashboard()">
+      <option value="">All cameras</option>
+      ${cameras.map(c=>`<option value="${c.camera_id}">${c.camera_id}</option>`).join('')}
+    </select>
+    </div></div><div id="dBody"><div class="empty">Loading…</div></div>`;
   const days=document.getElementById('dDays').value||1;
   document.getElementById('dDays').value=days;
   let d;try{d=await api('/api/dashboard?days='+days);}catch(e){document.getElementById('dBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
@@ -231,12 +239,16 @@ async function viewIncidents(){
         <option value="non_compliant">Non-compliant</option><option value="unable_to_assess">Unable to assess</option>
       </select>
       <select id="fBeh" onchange="loadIncidents()">${behaviourOptions('')}</select>
+      <select id="fCam" onchange="loadIncidents()">
+        <option value="">All cameras</option>
+        ${cameras.map(c=>`<option value="${c.camera_id}">${c.camera_id}</option>`).join('')}
+      </select>
     </div></div><div class="card" id="incBody"><div class="empty">Loading…</div></div>`;
   loadIncidents();
 }
 async function loadIncidents(){
-  const s=document.getElementById('fStatus').value, b=document.getElementById('fBeh').value;
-  let rows;try{rows=await api(`/api/incidents?status=${s}&behaviour=${b}&limit=200`);}catch(e){document.getElementById('incBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  const s=document.getElementById('fStatus').value, b=document.getElementById('fBeh').value, cam=document.getElementById('fCam').value;
+  let rows;try{rows=await api(`/api/incidents?status=${s}&behaviour=${b}&camera=${cam}&limit=200`);}catch(e){document.getElementById('incBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
   if(!rows.length){document.getElementById('incBody').innerHTML=`<div class="empty">No incidents found.</div>`;return;}
   document.getElementById('incBody').innerHTML=`<table><thead><tr><th>Time</th><th>Behaviour</th><th>Status</th><th>Risk</th><th>Conf.</th><th>Site</th><th>Validated</th><th></th></tr></thead><tbody>`+
     rows.map(r=>`<tr><td class="mono">${fmtTime(r.timestamp)}</td><td>${r.behaviour_type}</td>
