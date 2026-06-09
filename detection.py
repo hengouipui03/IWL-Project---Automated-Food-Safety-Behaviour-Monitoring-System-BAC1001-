@@ -49,13 +49,13 @@ ZONE_COLORS = {
 # ── YOLOv8 Pose ──────────────────────────────────────────────────
 model = YOLO("yolov8n-pose.pt")
 
-LEFT_WRIST = 9
+LEFT_WRIST  = 9
 RIGHT_WRIST = 10
-LEFT_SHOULDER = 5
+LEFT_SHOULDER  = 5
 RIGHT_SHOULDER = 6
-LEFT_HIP = 11
-RIGHT_HIP = 12
-LEFT_KNEE = 13
+LEFT_HIP   = 11
+RIGHT_HIP  = 12
+LEFT_KNEE  = 13
 RIGHT_KNEE = 14
 
 # ── MediaPipe Hand Analyser ───────────────────────────────────────
@@ -82,71 +82,64 @@ cv2.namedWindow("Handwash Detection", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Handwash Detection", 1280, 960)
 
 # ── Session states ───────────────────────────────────────────────
-IDLE = "IDLE"
-SOAPING = "SOAPING"
-RUBBING = "RUBBING"
-RINSING = "RINSING"
-DRYING = "DRYING"
-RECONTAMINATION = "RECONTAMINATION"
-COMPLETE = "COMPLETE"
+IDLE             = "IDLE"
+SOAPING          = "SOAPING"
+RUBBING          = "RUBBING"
+RINSING          = "RINSING"
+DRYING           = "DRYING"
+RECONTAMINATION  = "RECONTAMINATION"
+COMPLETE         = "COMPLETE"
 
 # ── Session variables ────────────────────────────────────────────
-state = IDLE
-session_start = 0.0
-rub_start = 0.0
-rub_duration = 0.0
-last_rub_time = 0.0
-dry_start = 0.0
-dry_duration = 0.0
-sink_entry_time = 0.0
+state                        = IDLE
+session_start                = 0.0
+rub_start                    = 0.0
+rub_duration                 = 0.0
+last_rub_time                = 0.0
+dry_start                    = 0.0
+dry_duration                 = 0.0
+sink_entry_time              = 0.0
 recontamination_contact_start = 0.0
-steps_completed = []
-last_seen = 0.0
-result_display = ""
-result_color = (255, 255, 255)
-result_timer = 0.0
-prev_lw = (0, 0)
-prev_rw = (0, 0)
-rub_confirm_count = 0
-technique_summary = None
-soap_check_active = False
-soap_entry_time = 0.0
-soap_reference_crops = []
-soap_change_count = 0
-body_dry_start = 0.0
-body_dry_duration = 0.0
-body_dry_wrist_history = deque(maxlen=45)  # ~1.5s at 30fps
+steps_completed              = []
+last_seen                    = 0.0
+result_display               = ""
+result_color                 = (255, 255, 255)
+result_timer                 = 0.0
+prev_lw                      = (0, 0)
+prev_rw                      = (0, 0)
+rub_confirm_count            = 0
+technique_summary            = None
+soap_entry_time              = 0.0
+body_dry_start               = 0.0
+body_dry_duration            = 0.0
+body_dry_wrist_history       = deque(maxlen=45)  # ~1.5s at 30fps
 
 lw_history = deque(maxlen=3)
 rw_history = deque(maxlen=3)
 
 # ── Tuning ───────────────────────────────────────────────────────
-MOTION_THRESHOLD = 3
-RUBBING_CONFIRM_FRAMES = 8
-NO_PERSON_TIMEOUT = 3.0
-RESULT_DISPLAY_TIME = 4.0
-WARNING_DURATION = 15.0
-SESSION_TIMEOUT = 60.0
-MIN_DRY_DURATION = 5.0
-KEYPOINT_CONFIDENCE = 0.3
-SOAP_GRACE_PERIOD = 4.0
-ASSUMED_SOAP_DURATION = 10.0
-RUB_PAUSE_TOLERANCE = 2.0
-BODY_DRY_MIN_DURATION = 1.5 # seconds of sustained motion to flag body drying
-BODY_DRY_MIN_DISPLACEMENT = 8 # min pixels per movement to count as deliberate
-BODY_DRY_MIN_REVERSALS = 3 # direction reversals needed in window to count as oscillation
-BODY_DRY_WINDOW = 1.5 # sliding window in seconds
-RECONTAMINATION_MONITOR_TIME = 8.0
-RECONTAMINATION_CONFIRM_TIME = 0.8
+MOTION_THRESHOLD          = 3
+RUBBING_CONFIRM_FRAMES    = 8
+NO_PERSON_TIMEOUT         = 3.0
+RESULT_DISPLAY_TIME       = 4.0
+WARNING_DURATION          = 15.0
+SESSION_TIMEOUT           = 60.0
+MIN_DRY_DURATION          = 5.0
+KEYPOINT_CONFIDENCE       = 0.3
+SOAP_GRACE_PERIOD         = 4.0
+ASSUMED_SOAP_DURATION     = 10.0
+RUB_PAUSE_TOLERANCE       = 2.0
+SOAP_DWELL_TIME           = 0.8   # seconds wrist must stay in soap zone to confirm soap
+BODY_DRY_MIN_DURATION     = 1.5
+BODY_DRY_MIN_DISPLACEMENT = 8
+BODY_DRY_MIN_REVERSALS    = 3
+BODY_DRY_WINDOW           = 1.5
+RECONTAMINATION_MONITOR_TIME  = 8.0
+RECONTAMINATION_CONFIRM_TIME  = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
-SOAP_VISUAL_WARMUP = 0.5
-SOAP_CHANGE_THRESHOLD = 22
-SOAP_CHANGE_PIXEL_RATIO = 0.06
-SOAP_CONFIRM_FRAMES = 3
-SOAP_ROI_SCALE = 0.55
 
 # ── Frame skip for performance ───────────────────────────────────
-frame_count = 0
+frame_count    = 0
 last_keypoints = None
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -176,60 +169,8 @@ def draw_zones(frame):
                         (z["x1"] + 4, z["y1"] + 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-def get_zone_center_crop(frame, zone, scale):
-    x1, y1, x2, y2 = zone["x1"], zone["y1"], zone["x2"], zone["y2"]
-    cx = int((x1 + x2) / 2)
-    cy = int((y1 + y2) / 2)
-    w = int((x2 - x1) * scale)
-    h = int((y2 - y1) * scale)
-
-    crop_x1 = max(0, cx - w // 2)
-    crop_y1 = max(0, cy - h // 2)
-    crop_x2 = min(frame.shape[1], cx + w // 2)
-    crop_y2 = min(frame.shape[0], cy + h // 2)
-
-    if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
-        return None
-    return frame[crop_y1:crop_y2, crop_x1:crop_x2].copy()
-
-def capture_soap_reference(frame):
-    reference_crops = []
-    for zone in zones.get("soap_dispenser", []):
-        crop = get_zone_center_crop(frame, zone, SOAP_ROI_SCALE)
-        if crop is not None:
-            reference_crops.append(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
-    return reference_crops
-
-def soap_visual_changed(frame, reference_crops):
-    for i, zone in enumerate(zones.get("soap_dispenser", [])):
-        if i >= len(reference_crops):
-            break
-
-        crop = get_zone_center_crop(frame, zone, SOAP_ROI_SCALE)
-        if crop is None:
-            continue
-
-        current = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        reference = reference_crops[i]
-        if current.shape != reference.shape:
-            continue
-
-        diff = cv2.absdiff(current, reference)
-        changed_pixels = ((diff[:, :, 0] > 8) |
-                          (diff[:, :, 1] > SOAP_CHANGE_THRESHOLD) |
-                          (diff[:, :, 2] > SOAP_CHANGE_THRESHOLD))
-        change_ratio = np.count_nonzero(changed_pixels) / changed_pixels.size
-
-        if change_ratio >= SOAP_CHANGE_PIXEL_RATIO:
-            return True
-
-    return False
-
 def get_body_zones(kp, kp_conf):
-    # Dynamically calculate body zones from skeleton keypoints
-    # Returns list of (x1, y1, x2, y2) tuples representing body zones
     body_zones = []
-    h, w = frame_height, frame_width
 
     def get_kp(idx):
         if float(kp_conf[idx]) > KEYPOINT_CONFIDENCE:
@@ -246,27 +187,21 @@ def get_body_zones(kp, kp_conf):
     # Chest zone — between shoulders and mid torso
     if ls and rs and lh and rh:
         mid_torso_y = int((ls[1] + rs[1] + lh[1] + rh[1]) / 4)
-        x1 = min(ls[0], rs[0]) - 20
-        x2 = max(ls[0], rs[0]) + 20
-        y1 = min(ls[1], rs[1])
-        y2 = mid_torso_y
-        body_zones.append(("chest", x1, y1, x2, y2))
+        body_zones.append(("chest",
+                           min(ls[0], rs[0]) - 20, min(ls[1], rs[1]),
+                           max(ls[0], rs[0]) + 20, mid_torso_y))
 
     # Waist zone — around hip landmarks
     if lh and rh:
-        x1 = min(lh[0], rh[0]) - 20
-        x2 = max(lh[0], rh[0]) + 20
-        y1 = min(lh[1], rh[1]) - 20
-        y2 = max(lh[1], rh[1]) + 20
-        body_zones.append(("waist", x1, y1, x2, y2))
+        body_zones.append(("waist",
+                           min(lh[0], rh[0]) - 20, min(lh[1], rh[1]) - 20,
+                           max(lh[0], rh[0]) + 20, max(lh[1], rh[1]) + 20))
 
     # Thigh zone — between hips and knees
     if lh and rh and lk and rk:
-        x1 = min(lh[0], rh[0]) - 20
-        x2 = max(lh[0], rh[0]) + 20
-        y1 = max(lh[1], rh[1])
-        y2 = int((lk[1] + rk[1]) / 2)
-        body_zones.append(("thigh", x1, y1, x2, y2))
+        body_zones.append(("thigh",
+                           min(lh[0], rh[0]) - 20, max(lh[1], rh[1]),
+                           max(lh[0], rh[0]) + 20, int((lk[1] + rk[1]) / 2)))
 
     return body_zones
 
@@ -277,27 +212,20 @@ def wrist_in_body_zone(px, py, body_zones):
     return None
 
 def detect_oscillation(history):
-    # Count direction reversals in the position history
     if len(history) < 4:
         return False
-
     positions = list(history)
     reversals = 0
     prev_dx = 0
-
     for i in range(1, len(positions)):
-        px, py, t = positions[i-1]
+        px, py, t = positions[i - 1]
         cx, cy, _ = positions[i]
         dx = cx - px
-
         if abs(dx) < BODY_DRY_MIN_DISPLACEMENT:
             continue
-
         if prev_dx != 0 and ((dx > 0) != (prev_dx > 0)):
             reversals += 1
-
         prev_dx = dx
-
     return reversals >= BODY_DRY_MIN_REVERSALS
 
 def draw_body_zones(frame, body_zones):
@@ -314,22 +242,22 @@ def log_step(step):
 def conclude_session():
     global state, result_display, result_color, result_timer, technique_summary
 
-    has_soap = "soap" in steps_completed
-    has_rub = "rub" in steps_completed
+    has_soap  = "soap"  in steps_completed
+    has_rub   = "rub"   in steps_completed
     has_rinse = "rinse" in steps_completed
-    has_dry = "dry" in steps_completed
+    has_dry   = "dry"   in steps_completed
 
     technique_summary = analyser.get_summary()
 
     if has_soap and has_rub and has_rinse and has_dry and rub_duration >= min_wash_duration:
         result_display = "PASS"
-        result_color = (0, 200, 0)
+        result_color   = (0, 200, 0)
     else:
         result_display = "FAIL"
-        result_color = (0, 0, 255)
+        result_color   = (0, 0, 255)
 
     expected = ["soap", "rub", "rinse", "dry"]
-    missed = [s for s in expected if s not in steps_completed]
+    missed   = [s for s in expected if s not in steps_completed]
 
     print(f"\n{'='*30}")
     print(f"Result:          {result_display}")
@@ -351,7 +279,7 @@ def conclude_session():
         print(f"Missing:         {technique_summary['missing']}")
     print(f"{'='*30}\n")
 
-    state = COMPLETE
+    state        = COMPLETE
     result_timer = time.time()
     send_to_dashboard(result_display, steps_completed, rub_duration, camera_id)
 
@@ -360,30 +288,27 @@ def reset_session():
     global dry_start, dry_duration, sink_entry_time, recontamination_contact_start
     global steps_completed, prev_lw, prev_rw
     global result_display, result_color, rub_confirm_count, technique_summary
-    global soap_check_active, soap_entry_time, soap_reference_crops, soap_change_count
+    global soap_entry_time, body_dry_start, body_dry_duration
 
-    state = IDLE
-    session_start = 0.0
-    rub_start = 0.0
-    rub_duration = 0.0
-    last_rub_time = 0.0
-    dry_start = 0.0
-    dry_duration = 0.0
-    sink_entry_time = 0.0
+    state                         = IDLE
+    session_start                 = 0.0
+    rub_start                     = 0.0
+    rub_duration                  = 0.0
+    last_rub_time                 = 0.0
+    dry_start                     = 0.0
+    dry_duration                  = 0.0
+    sink_entry_time               = 0.0
     recontamination_contact_start = 0.0
-    steps_completed = []
-    prev_lw = (0, 0)
-    prev_rw = (0, 0)
-    rub_confirm_count = 0
-    result_display = ""
-    result_color = (255, 255, 255)
-    technique_summary = None
-    soap_check_active = False
-    soap_entry_time = 0.0
-    soap_reference_crops = []
-    soap_change_count = 0
-    body_dry_start = 0.0
-    body_dry_duration = 0.0
+    steps_completed               = []
+    prev_lw                       = (0, 0)
+    prev_rw                       = (0, 0)
+    rub_confirm_count             = 0
+    result_display                = ""
+    result_color                  = (255, 255, 255)
+    technique_summary             = None
+    soap_entry_time               = 0.0
+    body_dry_start                = 0.0
+    body_dry_duration             = 0.0
     body_dry_wrist_history.clear()
     lw_history.clear()
     rw_history.clear()
@@ -404,26 +329,25 @@ while True:
         print("Session timed out")
         conclude_session()
 
-    # Run model every other frame for performance
+    # Run YOLO every other frame for performance
     frame_count += 1
     if frame_count % 2 == 0:
-        results = model(frame.copy(), verbose=False)
+        results        = model(frame.copy(), verbose=False)
         last_keypoints = results[0].keypoints
     keypoints = last_keypoints
 
     person_detected = keypoints is not None and len(keypoints) > 0
 
     if person_detected:
-        kp = keypoints.xy[0]
+        kp      = keypoints.xy[0]
         kp_conf = keypoints.conf[0]
 
-        lw_conf = float(kp_conf[LEFT_WRIST])
-        rw_conf = float(kp_conf[RIGHT_WRIST])
-
+        lw_conf    = float(kp_conf[LEFT_WRIST])
+        rw_conf    = float(kp_conf[RIGHT_WRIST])
         lw_visible = lw_conf > KEYPOINT_CONFIDENCE
         rw_visible = rw_conf > KEYPOINT_CONFIDENCE
 
-        raw_lw = (int(kp[LEFT_WRIST][0]), int(kp[LEFT_WRIST][1])) if lw_visible else None
+        raw_lw = (int(kp[LEFT_WRIST][0]),  int(kp[LEFT_WRIST][1]))  if lw_visible else None
         raw_rw = (int(kp[RIGHT_WRIST][0]), int(kp[RIGHT_WRIST][1])) if rw_visible else None
 
         if raw_lw is not None:
@@ -446,63 +370,53 @@ while True:
 
         in_sink_lw = lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "sink_tap")
         in_sink_rw = rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "sink_tap")
-        in_sink = in_sink_lw and in_sink_rw
-        in_soap = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser")) or
-                   (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser")))
-        in_dry = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")) or
-                  (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")))
+        in_sink    = in_sink_lw and in_sink_rw
+        in_soap    = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser")) or
+                      (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser")))
+        in_dry     = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")) or
+                      (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")))
 
-        moving = wrists_moving(lw_px, rw_px) if lw_px is not None and rw_px is not None else False
+        moving  = wrists_moving(lw_px, rw_px) if lw_px is not None and rw_px is not None else False
         rubbing = in_sink and moving
 
         # ── State machine ────────────────────────────────────────
         if state == IDLE:
             if in_soap:
-                state = SOAPING
+                state         = SOAPING
                 session_start = now
                 analyser.reset()
                 print("Session started — soap first")
             elif in_sink:
-                state = SOAPING
-                session_start = now
+                state           = SOAPING
+                session_start   = now
                 sink_entry_time = now
                 analyser.reset()
                 print("Session started — sink first, waiting for soap...")
 
         elif state == SOAPING:
+            # ── Motion-based soap detection ──────────────────────
+            # Confirm soap once the wrist has dwelt in the zone long enough
             if in_soap and "soap" not in steps_completed:
-                if not soap_check_active:
-                    soap_check_active = True
+                if soap_entry_time == 0.0:
                     soap_entry_time = now
-                    soap_reference_crops = []
-                    soap_change_count = 0
-                    print("Soap zone entered — checking for soap dispense...")
-                elif now - soap_entry_time >= SOAP_VISUAL_WARMUP:
-                    if not soap_reference_crops:
-                        soap_reference_crops = capture_soap_reference(frame)
-                        print("Soap reference captured — waiting for visual change...")
-                    elif soap_visual_changed(frame, soap_reference_crops):
-                        soap_change_count += 1
-                        if soap_change_count >= SOAP_CONFIRM_FRAMES:
-                            log_step("soap")
-                            sink_entry_time = 0.0
-                    else:
-                        soap_change_count = 0
+                    print("Soap zone entered — waiting for dwell confirmation...")
+                elif now - soap_entry_time >= SOAP_DWELL_TIME:
+                    log_step("soap")
+                    sink_entry_time = 0.0   # clear grace-period timer
             elif not in_soap:
-                soap_check_active = False
-                soap_entry_time = 0.0
-                soap_reference_crops = []
-                soap_change_count = 0
+                # Reset dwell timer if they leave too quickly
+                if soap_entry_time > 0 and "soap" not in steps_completed:
+                    soap_entry_time = 0.0
 
             soap_confirmed = "soap" in steps_completed
-            grace_passed = sink_entry_time > 0 and (now - sink_entry_time) > SOAP_GRACE_PERIOD
+            grace_passed   = sink_entry_time > 0 and (now - sink_entry_time) > SOAP_GRACE_PERIOD
 
             if soap_confirmed or grace_passed:
                 if rubbing:
                     rub_confirm_count += 1
                     if rub_confirm_count >= RUBBING_CONFIRM_FRAMES:
-                        state = RUBBING
-                        rub_start = now
+                        state         = RUBBING
+                        rub_start     = now
                         last_rub_time = now
                 else:
                     rub_confirm_count = 0
@@ -513,37 +427,32 @@ while True:
 
             if rubbing:
                 rub_duration += now - rub_start
-                rub_start = now
+                rub_start     = now
                 last_rub_time = now
             else:
                 if now - last_rub_time < RUB_PAUSE_TOLERANCE:
                     rub_duration += now - rub_start
-                    rub_start = now
-                else:
-                    rub_start = now
+                rub_start = now
 
             if "soap" not in steps_completed and rub_duration >= ASSUMED_SOAP_DURATION:
                 print("  (soap skipped — rubbing 10s without soap step)")
 
-            if rub_duration >= min_wash_duration and not in_sink:
+            # Transition to RINSING as soon as minimum rub time is reached
+            if rub_duration >= min_wash_duration:
                 log_step("rub")
                 state = RINSING
-
-            if rub_duration >= WARNING_DURATION and (now - last_rub_time) >= RUB_PAUSE_TOLERANCE:
-                log_step("rub")
-                state = RINSING
+                print("Rubbing complete — waiting for rinse / drying zone...")
 
         elif state == RINSING:
             log_step("rinse")
 
-            # Check for body drying — wrist rubbing on chest, waist or thigh
-            if person_detected and (lw_px is not None or rw_px is not None):
-                kp_raw = keypoints.xy[0]
-                kp_conf_raw = keypoints.conf[0]
-                body_zones = get_body_zones(kp_raw, kp_conf_raw)
-                draw_body_zones(frame, body_zones)
+            # Draw body skeleton overlay while in RINSING
+            body_zones = get_body_zones(kp, kp_conf)
+            draw_body_zones(frame, body_zones)
 
-                active_wrist = lw_px if lw_px is not None else rw_px
+            # Body-drying detection — wrist rubbing on chest, waist, or thigh
+            active_wrist = lw_px if lw_px is not None else rw_px
+            if active_wrist is not None:
                 zone_hit = wrist_in_body_zone(active_wrist[0], active_wrist[1], body_zones)
 
                 if zone_hit:
@@ -552,29 +461,31 @@ while True:
                         body_dry_start = now
                     body_dry_duration = now - body_dry_start
 
-                    if body_dry_duration >= BODY_DRY_MIN_DURATION and detect_oscillation(body_dry_wrist_history):
+                    if (body_dry_duration >= BODY_DRY_MIN_DURATION and
+                            detect_oscillation(body_dry_wrist_history)):
                         if "body_drying" not in steps_completed:
                             log_step("body_drying")
                             print(f"  ⚠ Body drying detected on {zone_hit} — possible contamination")
                 else:
-                    body_dry_start = 0.0
+                    body_dry_start    = 0.0
                     body_dry_duration = 0.0
                     body_dry_wrist_history.clear()
 
+            # Only advance to DRYING once the wrist enters the dryer zone
             if in_dry:
-                state = DRYING
+                log_step("dry")  # pre-log; duration check happens in DRYING
+                state     = DRYING
                 dry_start = now
 
         elif state == DRYING:
             if in_dry:
                 dry_duration += now - dry_start
-                dry_start = now
+                dry_start     = now
             else:
                 dry_start = now
 
             if dry_duration >= MIN_DRY_DURATION:
-                log_step("dry")
-                state = RECONTAMINATION
+                state        = RECONTAMINATION
                 result_timer = now
                 recontamination_contact_start = 0.0
                 print("Drying complete — monitoring for recontamination...")
@@ -613,9 +524,9 @@ while True:
                     conclude_session()
                 else:
                     result_display = "MISSED"
-                    result_color = (0, 165, 255)
-                    result_timer = now
-                    state = COMPLETE
+                    result_color   = (0, 165, 255)
+                    result_timer   = now
+                    state          = COMPLETE
                     print("MISSED — no steps completed")
 
     else:
@@ -626,9 +537,9 @@ while True:
                     conclude_session()
                 else:
                     result_display = "MISSED"
-                    result_color = (0, 165, 255)
-                    result_timer = now
-                    state = COMPLETE
+                    result_color   = (0, 165, 255)
+                    result_timer   = now
+                    state          = COMPLETE
                     print("MISSED — no steps completed")
 
     # ── HUD ──────────────────────────────────────────────────────
@@ -653,8 +564,8 @@ while True:
         cv2.putText(frame, f"Waiting for soap... {grace_remaining:.1f}s",
                     (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 1)
 
-    if state == RUBBING and technique_summary is None:
-        technique = analyser.get_summary()
+    if state == RUBBING:
+        technique   = analyser.get_summary()
         score_color = (0, 255, 0) if technique["technique_score"] >= 3 else (0, 165, 255)
         cv2.putText(frame, f"Technique: {technique['technique_score']}/4",
                     (10, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.5, score_color, 1)
@@ -666,7 +577,6 @@ while True:
     if result_display and state == COMPLETE:
         cv2.putText(frame, result_display, (150, 280),
                     cv2.FONT_HERSHEY_SIMPLEX, 2.0, result_color, 4)
-
         if technique_summary:
             cv2.putText(frame, f"Technique: {technique_summary['technique_score']}/4",
                         (150, 340), cv2.FONT_HERSHEY_SIMPLEX, 1.0, result_color, 2)
