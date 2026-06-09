@@ -48,6 +48,12 @@ model = YOLO("yolov8n-pose.pt")
 
 LEFT_WRIST = 9
 RIGHT_WRIST = 10
+LEFT_SHOULDER = 5
+RIGHT_SHOULDER = 6
+LEFT_HIP = 11
+RIGHT_HIP = 12
+LEFT_KNEE = 13
+RIGHT_KNEE = 14
 
 # ── MediaPipe Hand Analyser ───────────────────────────────────────
 analyser = HandAnalyser()
@@ -113,6 +119,10 @@ KEYPOINT_CONFIDENCE = 0.3
 SOAP_GRACE_PERIOD = 4.0
 ASSUMED_SOAP_DURATION = 10.0
 RUB_PAUSE_TOLERANCE = 2.0
+BODY_DRY_MIN_DURATION = 1.5 # seconds of sustained motion to flag body drying
+BODY_DRY_MIN_DISPLACEMENT = 8 # min pixels per movement to count as deliberate
+BODY_DRY_MIN_REVERSALS = 3 # direction reversals needed in window to count as oscillation
+BODY_DRY_WINDOW = 1.5 # sliding window in seconds
 RECONTAMINATION_MONITOR_TIME = 8.0
 RECONTAMINATION_CONFIRM_TIME = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
@@ -147,6 +157,87 @@ def draw_zones(frame):
             cv2.putText(frame, f"{zone_type} #{i+1}",
                         (z["x1"] + 4, z["y1"] + 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+def get_body_zones(kp, kp_conf):
+    # Dynamically calculate body zones from skeleton keypoints
+    # Returns list of (x1, y1, x2, y2) tuples representing body zones
+    body_zones = []
+    h, w = frame_height, frame_width
+
+    def get_kp(idx):
+        if float(kp_conf[idx]) > KEYPOINT_CONFIDENCE:
+            return (int(kp[idx][0]), int(kp[idx][1]))
+        return None
+
+    ls = get_kp(LEFT_SHOULDER)
+    rs = get_kp(RIGHT_SHOULDER)
+    lh = get_kp(LEFT_HIP)
+    rh = get_kp(RIGHT_HIP)
+    lk = get_kp(LEFT_KNEE)
+    rk = get_kp(RIGHT_KNEE)
+
+    # Chest zone — between shoulders and mid torso
+    if ls and rs and lh and rh:
+        mid_torso_y = int((ls[1] + rs[1] + lh[1] + rh[1]) / 4)
+        x1 = min(ls[0], rs[0]) - 20
+        x2 = max(ls[0], rs[0]) + 20
+        y1 = min(ls[1], rs[1])
+        y2 = mid_torso_y
+        body_zones.append(("chest", x1, y1, x2, y2))
+
+    # Waist zone — around hip landmarks
+    if lh and rh:
+        x1 = min(lh[0], rh[0]) - 20
+        x2 = max(lh[0], rh[0]) + 20
+        y1 = min(lh[1], rh[1]) - 20
+        y2 = max(lh[1], rh[1]) + 20
+        body_zones.append(("waist", x1, y1, x2, y2))
+
+    # Thigh zone — between hips and knees
+    if lh and rh and lk and rk:
+        x1 = min(lh[0], rh[0]) - 20
+        x2 = max(lh[0], rh[0]) + 20
+        y1 = max(lh[1], rh[1])
+        y2 = int((lk[1] + rk[1]) / 2)
+        body_zones.append(("thigh", x1, y1, x2, y2))
+
+    return body_zones
+
+def wrist_in_body_zone(px, py, body_zones):
+    for name, x1, y1, x2, y2 in body_zones:
+        if x1 < px < x2 and y1 < py < y2:
+            return name
+    return None
+
+def detect_oscillation(history):
+    # Count direction reversals in the position history
+    if len(history) < 4:
+        return False
+
+    positions = list(history)
+    reversals = 0
+    prev_dx = 0
+
+    for i in range(1, len(positions)):
+        px, py, t = positions[i-1]
+        cx, cy, _ = positions[i]
+        dx = cx - px
+
+        if abs(dx) < BODY_DRY_MIN_DISPLACEMENT:
+            continue
+
+        if prev_dx != 0 and ((dx > 0) != (prev_dx > 0)):
+            reversals += 1
+
+        prev_dx = dx
+
+    return reversals >= BODY_DRY_MIN_REVERSALS
+
+def draw_body_zones(frame, body_zones):
+    for name, x1, y1, x2, y2 in body_zones:
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 100, 255), 1)
+        cv2.putText(frame, name, (x1 + 2, y1 + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 100, 255), 1)
 
 def log_step(step):
     if step not in steps_completed:
