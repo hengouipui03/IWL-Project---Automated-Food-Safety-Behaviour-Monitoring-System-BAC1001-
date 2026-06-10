@@ -50,14 +50,14 @@ ZONE_COLORS = {
 # ── YOLOv8 Pose ──────────────────────────────────────────────────
 model = YOLO("yolov8n-pose.pt")
 
-LEFT_WRIST     = 9
-RIGHT_WRIST    = 10
-LEFT_SHOULDER  = 5
+LEFT_WRIST = 9
+RIGHT_WRIST = 10
+LEFT_SHOULDER = 5
 RIGHT_SHOULDER = 6
-LEFT_HIP       = 11
-RIGHT_HIP      = 12
-LEFT_KNEE      = 13
-RIGHT_KNEE     = 14
+LEFT_HIP = 11
+RIGHT_HIP = 12
+LEFT_KNEE = 13
+RIGHT_KNEE = 14
 
 # ── MediaPipe Hand Analyser ───────────────────────────────────────
 analyser = HandAnalyser()
@@ -83,58 +83,58 @@ cv2.namedWindow("Handwash Detection", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Handwash Detection", 1280, 960)
 
 # ── Session states ───────────────────────────────────────────────
-IDLE            = "IDLE"
-SOAPING         = "SOAPING"
-RUBBING         = "RUBBING"
-RINSING         = "RINSING"
-DRYING          = "DRYING"
+IDLE = "IDLE"
+SOAPING = "SOAPING"
+RUBBING = "RUBBING"
+RINSING = "RINSING"
+DRYING = "DRYING"
 RECONTAMINATION = "RECONTAMINATION"
-COMPLETE        = "COMPLETE"
+COMPLETE = "COMPLETE"
 
 # ── Session variables ────────────────────────────────────────────
-state                         = IDLE
-session_start                 = 0.0
-rub_start                     = 0.0
-rub_duration                  = 0.0
-last_rub_time                 = 0.0
-dry_start                     = 0.0
-dry_duration                  = 0.0
-sink_entry_time               = 0.0
+state = IDLE
+session_start = 0.0
+rub_start = 0.0
+rub_duration = 0.0
+last_rub_time = 0.0
+dry_start = 0.0
+dry_duration = 0.0
+sink_entry_time = 0.0
 recontamination_contact_start = 0.0
-steps_completed               = []
-last_seen                     = 0.0
-result_display                = ""
-result_color                  = (255, 255, 255)
-result_timer                  = 0.0
-prev_lw                       = (0, 0)
-prev_rw                       = (0, 0)
-rub_confirm_count             = 0
-technique_summary             = None
-soap_entry_time               = 0.0
-body_dry_start                = 0.0
-body_dry_duration             = 0.0
-body_dry_wrist_history        = deque(maxlen=45)  # ~1.5s at 30fps
+steps_completed = []
+last_seen = 0.0
+result_display = ""
+result_color = (255, 255, 255)
+result_timer = 0.0
+prev_lw = (0, 0)
+prev_rw = (0, 0)
+rub_confirm_count = 0
+technique_summary = None
+soap_entry_time = 0.0
+body_dry_start = 0.0
+body_dry_duration = 0.0
+body_dry_wrist_history = deque(maxlen=45)  # ~1.5s at 30fps
 
 lw_history = deque(maxlen=3)
 rw_history = deque(maxlen=3)
 
 # ── Tuning ───────────────────────────────────────────────────────
-MOTION_THRESHOLD          = 3
-RUBBING_CONFIRM_FRAMES    = 8
-NO_PERSON_TIMEOUT         = 3.0
-RESULT_DISPLAY_TIME       = 4.0
-SESSION_TIMEOUT           = 60.0
-MIN_DRY_DURATION          = 5.0
-KEYPOINT_CONFIDENCE       = 0.3
-SOAP_GRACE_PERIOD         = 4.0
-ASSUMED_SOAP_DURATION     = 10.0
-RUB_PAUSE_TOLERANCE       = 2.0
-SOAP_DWELL_TIME           = 0.8
-BODY_DRY_MIN_DURATION     = 1.5
+MOTION_THRESHOLD = 3
+RUBBING_CONFIRM_FRAMES = 8
+NO_PERSON_TIMEOUT = 3.0
+RESULT_DISPLAY_TIME = 4.0
+SESSION_TIMEOUT = 60.0
+MIN_DRY_DURATION = 5.0
+KEYPOINT_CONFIDENCE = 0.3
+SOAP_GRACE_PERIOD = 4.0
+ASSUMED_SOAP_DURATION = 10.0
+RUB_PAUSE_TOLERANCE = 2.0
+SOAP_DWELL_TIME = 0.8
+BODY_DRY_MIN_DURATION = 1.5
 BODY_DRY_MIN_DISPLACEMENT = 8
-BODY_DRY_MIN_REVERSALS    = 3
-RECONTAMINATION_MONITOR_TIME  = 8.0
-RECONTAMINATION_CONFIRM_TIME  = 0.8
+BODY_DRY_MIN_REVERSALS = 3
+RECONTAMINATION_MONITOR_TIME = 8.0
+RECONTAMINATION_CONFIRM_TIME = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
 
 # ── Frame skip for performance ───────────────────────────────────
@@ -316,25 +316,25 @@ def reset_session():
     global result_display, result_color, rub_confirm_count, technique_summary
     global soap_entry_time, body_dry_start, body_dry_duration
 
-    state                         = IDLE
-    session_start                 = 0.0
-    rub_start                     = 0.0
-    rub_duration                  = 0.0
-    last_rub_time                 = 0.0
-    dry_start                     = 0.0
-    dry_duration                  = 0.0
-    sink_entry_time               = 0.0
+    state = IDLE
+    session_start = 0.0
+    rub_start = 0.0
+    rub_duration = 0.0
+    last_rub_time = 0.0
+    dry_start = 0.0
+    dry_duration = 0.0
+    sink_entry_time = 0.0
     recontamination_contact_start = 0.0
-    steps_completed               = []
-    prev_lw                       = (0, 0)
-    prev_rw                       = (0, 0)
-    rub_confirm_count             = 0
-    result_display                = ""
-    result_color                  = (255, 255, 255)
-    technique_summary             = None
-    soap_entry_time               = 0.0
-    body_dry_start                = 0.0
-    body_dry_duration             = 0.0
+    steps_completed = []
+    prev_lw = (0, 0)
+    prev_rw = (0, 0)
+    rub_confirm_count = 0
+    result_display = ""
+    result_color = (255, 255, 255)
+    technique_summary = None
+    soap_entry_time = 0.0
+    body_dry_start = 0.0
+    body_dry_duration = 0.0
     body_dry_wrist_history.clear()
     lw_history.clear()
     rw_history.clear()
@@ -368,8 +368,8 @@ while True:
         kp      = keypoints.xy[0]
         kp_conf = keypoints.conf[0]
 
-        lw_conf    = float(kp_conf[LEFT_WRIST])
-        rw_conf    = float(kp_conf[RIGHT_WRIST])
+        lw_conf = float(kp_conf[LEFT_WRIST])
+        rw_conf = float(kp_conf[RIGHT_WRIST])
         lw_visible = lw_conf > KEYPOINT_CONFIDENCE
         rw_visible = rw_conf > KEYPOINT_CONFIDENCE
 
@@ -399,8 +399,8 @@ while True:
 
         in_sink_lw = lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "sink_tap")
         in_sink_rw = rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "sink_tap")
-        in_sink    = in_sink_lw and in_sink_rw
-        in_soap    = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser")) or
+        in_sink = in_sink_lw and in_sink_rw
+        in_soap = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser")) or
                       (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser")))
         in_dry_lw  = lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")
         in_dry_rw  = rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")
@@ -412,13 +412,13 @@ while True:
         # ── State machine ────────────────────────────────────────
         if state == IDLE:
             if in_soap:
-                state         = SOAPING
+                state = SOAPING
                 session_start = now
                 analyser.reset()
                 print("Session started — soap first")
             elif in_sink:
-                state           = SOAPING
-                session_start   = now
+                state = SOAPING
+                session_start = now
                 sink_entry_time = now
                 analyser.reset()
                 print("Session started — sink first, waiting for soap...")
@@ -442,8 +442,8 @@ while True:
                 if rubbing:
                     rub_confirm_count += 1
                     if rub_confirm_count >= RUBBING_CONFIRM_FRAMES:
-                        state         = RUBBING
-                        rub_start     = now
+                        state = RUBBING
+                        rub_start = now
                         last_rub_time = now
                 else:
                     rub_confirm_count = 0
@@ -453,7 +453,7 @@ while True:
 
             if rubbing:
                 rub_duration += now - rub_start
-                rub_start     = now
+                rub_start = now
                 last_rub_time = now
             else:
                 if now - last_rub_time < RUB_PAUSE_TOLERANCE:
@@ -496,7 +496,7 @@ while True:
 
             # Transition to DRYING once both wrists enter the dryer zone
             if in_dry:
-                state     = DRYING
+                state = DRYING
                 dry_start = now
 
         elif state == DRYING:
@@ -511,7 +511,7 @@ while True:
 
             if dry_duration >= MIN_DRY_DURATION:
                 log_step("dry")
-                state        = RECONTAMINATION
+                state = RECONTAMINATION
                 result_timer = now
                 recontamination_contact_start = 0.0
                 print("Drying complete — monitoring for recontamination...")
@@ -550,9 +550,9 @@ while True:
                     conclude_session()
                 else:
                     result_display = "MISSED"
-                    result_color   = (0, 165, 255)
-                    result_timer   = now
-                    state          = COMPLETE
+                    result_color = (0, 165, 255)
+                    result_timer = now
+                    state = COMPLETE
                     print("MISSED — no steps completed")
 
     else:
@@ -563,9 +563,9 @@ while True:
                     conclude_session()
                 else:
                     result_display = "MISSED"
-                    result_color   = (0, 165, 255)
-                    result_timer   = now
-                    state          = COMPLETE
+                    result_color = (0, 165, 255)
+                    result_timer = now
+                    state = COMPLETE
                     print("MISSED — no steps completed")
 
     # ── HUD ──────────────────────────────────────────────────────
