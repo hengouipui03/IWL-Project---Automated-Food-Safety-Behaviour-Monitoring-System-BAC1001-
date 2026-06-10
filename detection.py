@@ -3,6 +3,7 @@ import argparse
 import json
 import time
 import platform
+import threading
 import numpy as np
 from collections import deque
 from ultralytics import YOLO
@@ -49,14 +50,14 @@ ZONE_COLORS = {
 # ── YOLOv8 Pose ──────────────────────────────────────────────────
 model = YOLO("yolov8n-pose.pt")
 
-LEFT_WRIST  = 9
-RIGHT_WRIST = 10
+LEFT_WRIST     = 9
+RIGHT_WRIST    = 10
 LEFT_SHOULDER  = 5
 RIGHT_SHOULDER = 6
-LEFT_HIP   = 11
-RIGHT_HIP  = 12
-LEFT_KNEE  = 13
-RIGHT_KNEE = 14
+LEFT_HIP       = 11
+RIGHT_HIP      = 12
+LEFT_KNEE      = 13
+RIGHT_KNEE     = 14
 
 # ── MediaPipe Hand Analyser ───────────────────────────────────────
 analyser = HandAnalyser()
@@ -82,39 +83,37 @@ cv2.namedWindow("Handwash Detection", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Handwash Detection", 1280, 960)
 
 # ── Session states ───────────────────────────────────────────────
-IDLE             = "IDLE"
-SOAPING          = "SOAPING"
-RUBBING          = "RUBBING"
-RINSING          = "RINSING"
-DRYING           = "DRYING"
-RECONTAMINATION  = "RECONTAMINATION"
-COMPLETE         = "COMPLETE"
+IDLE            = "IDLE"
+SOAPING         = "SOAPING"
+RUBBING         = "RUBBING"
+RINSING         = "RINSING"
+DRYING          = "DRYING"
+RECONTAMINATION = "RECONTAMINATION"
+COMPLETE        = "COMPLETE"
 
 # ── Session variables ────────────────────────────────────────────
-state                        = IDLE
-session_start                = 0.0
-rub_start                    = 0.0
-rub_duration                 = 0.0
-last_rub_time                = 0.0
-dry_start                    = 0.0
-dry_duration                 = 0.0
-last_dry_time                = 0.0
-dry_confirm_count            = 0
-sink_entry_time              = 0.0
+state                         = IDLE
+session_start                 = 0.0
+rub_start                     = 0.0
+rub_duration                  = 0.0
+last_rub_time                 = 0.0
+dry_start                     = 0.0
+dry_duration                  = 0.0
+sink_entry_time               = 0.0
 recontamination_contact_start = 0.0
-steps_completed              = []
-last_seen                    = 0.0
-result_display               = ""
-result_color                 = (255, 255, 255)
-result_timer                 = 0.0
-prev_lw                      = (0, 0)
-prev_rw                      = (0, 0)
-rub_confirm_count            = 0
-technique_summary            = None
-soap_entry_time              = 0.0
-body_dry_start               = 0.0
-body_dry_duration            = 0.0
-body_dry_wrist_history       = deque(maxlen=45)  # ~1.5s at 30fps
+steps_completed               = []
+last_seen                     = 0.0
+result_display                = ""
+result_color                  = (255, 255, 255)
+result_timer                  = 0.0
+prev_lw                       = (0, 0)
+prev_rw                       = (0, 0)
+rub_confirm_count             = 0
+technique_summary             = None
+soap_entry_time               = 0.0
+body_dry_start                = 0.0
+body_dry_duration             = 0.0
+body_dry_wrist_history        = deque(maxlen=45)  # ~1.5s at 30fps
 
 lw_history = deque(maxlen=3)
 rw_history = deque(maxlen=3)
@@ -124,24 +123,19 @@ MOTION_THRESHOLD          = 3
 RUBBING_CONFIRM_FRAMES    = 8
 NO_PERSON_TIMEOUT         = 3.0
 RESULT_DISPLAY_TIME       = 4.0
-WARNING_DURATION          = 15.0
 SESSION_TIMEOUT           = 60.0
 MIN_DRY_DURATION          = 5.0
 KEYPOINT_CONFIDENCE       = 0.3
 SOAP_GRACE_PERIOD         = 4.0
 ASSUMED_SOAP_DURATION     = 10.0
 RUB_PAUSE_TOLERANCE       = 2.0
-SOAP_DWELL_TIME           = 0.8   # seconds wrist must stay in soap zone to confirm soap
+SOAP_DWELL_TIME           = 0.8
 BODY_DRY_MIN_DURATION     = 1.5
 BODY_DRY_MIN_DISPLACEMENT = 8
 BODY_DRY_MIN_REVERSALS    = 3
-BODY_DRY_WINDOW           = 1.5
 RECONTAMINATION_MONITOR_TIME  = 8.0
 RECONTAMINATION_CONFIRM_TIME  = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
-DRY_CONFIRM_FRAMES            = 8    # frames of valid drying motion before count starts
-DRY_PAUSE_TOLERANCE           = 2.0  # seconds of stillness allowed mid-dry
-DRY_MOTION_THRESHOLD          = 5    # pixel displacement to count as drying motion
 
 # ── Frame skip for performance ───────────────────────────────────
 frame_count    = 0
@@ -154,9 +148,9 @@ def point_in_zone(px, py, zone):
 def wrist_in_zones(px, py, zone_type):
     return any(point_in_zone(px, py, z) for z in zones.get(zone_type, []))
 
-def wrists_moving(lw, rw, threshold=MOTION_THRESHOLD):
-    lw_moved = abs(lw[0] - prev_lw[0]) + abs(lw[1] - prev_lw[1]) > threshold
-    rw_moved = abs(rw[0] - prev_rw[0]) + abs(rw[1] - prev_rw[1]) > threshold
+def wrists_moving(lw, rw):
+    lw_moved = abs(lw[0] - prev_lw[0]) + abs(lw[1] - prev_lw[1]) > MOTION_THRESHOLD
+    rw_moved = abs(rw[0] - prev_rw[0]) + abs(rw[1] - prev_rw[1]) > MOTION_THRESHOLD
     return lw_moved or rw_moved
 
 def smooth_wrist(history, new_point):
@@ -190,15 +184,13 @@ def get_body_zone(kp, kp_conf):
         return None
 
     shoulder_w = abs(ls[0] - rs[0])
-    # Inset slightly from shoulder edges for a chest-width box
-    x1 = min(ls[0], rs[0]) + int(shoulder_w * 0.05)
-    x2 = max(ls[0], rs[0]) - int(shoulder_w * 0.05)
+    x1 = min(ls[0], rs[0]) + int(shoulder_w * 0.1)
+    x2 = max(ls[0], rs[0]) - int(shoulder_w * 0.1)
     if x1 >= x2:
         x1 = min(ls[0], rs[0])
         x2 = max(ls[0], rs[0])
     y1 = min(ls[1], rs[1])
 
-    # Bottom: hip midpoint = chest/abdomen; estimate if hips not visible
     if lh and rh:
         y2 = int((lh[1] + rh[1]) / 2) + 10
     else:
@@ -226,10 +218,10 @@ def draw_body_zone(frame, box):
 def draw_skeleton(frame, kp, kp_conf):
     """Draw full skeleton every frame to stabilise keypoint confidence."""
     SKELETON_EDGES = [
-        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),   # shoulders + arms
-        (5, 11), (6, 12), (11, 12),                  # torso
-        (11, 13), (13, 15), (12, 14), (14, 16),      # legs
-        (0, 1), (0, 2), (1, 3), (2, 4),              # face
+        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+        (5, 11), (6, 12), (11, 12),
+        (11, 13), (13, 15), (12, 14), (14, 16),
+        (0, 1), (0, 2), (1, 3), (2, 4),
     ]
     pts = {}
     for i in range(len(kp_conf)):
@@ -297,7 +289,7 @@ def conclude_session():
     if "recontamination" in steps_completed:
         print("  ⚠ Recontamination flagged")
     if "body_drying" in steps_completed:
-        print("  ⚠ Body drying flagged — hands dried on body instead of designated station")
+        print("  ⚠ Body drying flagged — hands dried on body instead of dryer")
     print(f"\n── Technique Summary ──")
     print(f"Score:           {technique_summary['technique_score']}/4")
     print(f"Palm up:         {technique_summary['palm_up']}")
@@ -310,7 +302,12 @@ def conclude_session():
 
     state        = COMPLETE
     result_timer = time.time()
-    send_to_dashboard(result_display, steps_completed, rub_duration, camera_id)
+    # Non-blocking — runs in background so the main loop never freezes
+    threading.Thread(
+        target=send_to_dashboard,
+        args=(result_display, steps_completed, rub_duration, camera_id),
+        daemon=True
+    ).start()
 
 def reset_session():
     global state, session_start, rub_start, rub_duration, last_rub_time
@@ -326,8 +323,6 @@ def reset_session():
     last_rub_time                 = 0.0
     dry_start                     = 0.0
     dry_duration                  = 0.0
-    last_dry_time                 = 0.0
-    dry_confirm_count             = 0
     sink_entry_time               = 0.0
     recontamination_contact_start = 0.0
     steps_completed               = []
@@ -395,7 +390,7 @@ while True:
             rw_px = None
             rw_history.clear()
 
-        # Draw full skeleton every frame — improves keypoint confidence stability
+        # Draw full skeleton every frame — stabilises keypoint confidence
         draw_skeleton(frame, kp, kp_conf)
 
         valid_wrist_detected = lw_px is not None or rw_px is not None
@@ -409,12 +404,10 @@ while True:
                       (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser")))
         in_dry_lw  = lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")
         in_dry_rw  = rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")
-        in_dry     = in_dry_lw and in_dry_rw
+        in_dry     = in_dry_lw and in_dry_rw  # both wrists required
 
         moving  = wrists_moving(lw_px, rw_px) if lw_px is not None and rw_px is not None else False
         rubbing = in_sink and moving
-        drying  = in_dry and (wrists_moving(lw_px, rw_px, DRY_MOTION_THRESHOLD)
-                              if lw_px is not None and rw_px is not None else False)
 
         # ── State machine ────────────────────────────────────────
         if state == IDLE:
@@ -431,17 +424,14 @@ while True:
                 print("Session started — sink first, waiting for soap...")
 
         elif state == SOAPING:
-            # ── Motion-based soap detection ──────────────────────
-            # Confirm soap once the wrist has dwelt in the zone long enough
             if in_soap and "soap" not in steps_completed:
                 if soap_entry_time == 0.0:
                     soap_entry_time = now
                     print("Soap zone entered — waiting for dwell confirmation...")
                 elif now - soap_entry_time >= SOAP_DWELL_TIME:
                     log_step("soap")
-                    sink_entry_time = 0.0   # clear grace-period timer
+                    sink_entry_time = 0.0
             elif not in_soap:
-                # Reset dwell timer if they leave too quickly
                 if soap_entry_time > 0 and "soap" not in steps_completed:
                     soap_entry_time = 0.0
 
@@ -459,7 +449,6 @@ while True:
                     rub_confirm_count = 0
 
         elif state == RUBBING:
-            # Run hand analysis every frame during rubbing
             _, frame = analyser.analyse(frame)
 
             if rubbing:
@@ -474,7 +463,6 @@ while True:
             if "soap" not in steps_completed and rub_duration >= ASSUMED_SOAP_DURATION:
                 print("  (soap skipped — rubbing 10s without soap step)")
 
-            # Transition to RINSING as soon as minimum rub time is reached
             if rub_duration >= min_wash_duration:
                 log_step("rub")
                 state = RINSING
@@ -483,11 +471,11 @@ while True:
         elif state == RINSING:
             log_step("rinse")
 
-            # Chest-width body box — shoulders to hip midpoint
+            # Chest-width body box — visible from RINSING onwards
             body_box = get_body_zone(kp, kp_conf)
             draw_body_zone(frame, body_box)
 
-            # Body-drying detection — wrist oscillating inside body box
+            # Body-drying detection — wrist oscillating on torso
             active_wrist = lw_px if lw_px is not None else rw_px
             if active_wrist is not None:
                 zone_hit = wrist_in_body_zone(active_wrist[0], active_wrist[1], body_box)
@@ -508,27 +496,18 @@ while True:
 
             # Transition to DRYING once both wrists enter the dryer zone
             if in_dry:
-                state             = DRYING
-                dry_start         = now
-                last_dry_time     = now
-                dry_confirm_count = 0
+                state     = DRYING
+                dry_start = now
 
         elif state == DRYING:
-            # Keep body box visible until drying is fully confirmed
-            if "dry" not in steps_completed:
-                body_box = get_body_zone(kp, kp_conf)
-                draw_body_zone(frame, body_box)
+            # Body box stays visible until drying is confirmed
+            body_box = get_body_zone(kp, kp_conf)
+            draw_body_zone(frame, body_box)
 
-            # Mirror rubbing algo: confirm frames, motion threshold, pause tolerance
-            if drying:
-                dry_confirm_count += 1
-                if dry_confirm_count >= DRY_CONFIRM_FRAMES:
-                    dry_duration  += now - dry_start
-                    last_dry_time  = now
-                dry_start = now
-            else:
-                dry_confirm_count = 0
-                dry_start         = now   # freeze count, don't reset it
+            # Both wrists in zone → count. Simple.
+            if in_dry:
+                dry_duration += now - dry_start
+            dry_start = now
 
             if dry_duration >= MIN_DRY_DURATION:
                 log_step("dry")
@@ -545,7 +524,7 @@ while True:
                     recontamination_contact_start = now
                 if (now - recontamination_contact_start) >= RECONTAMINATION_CONFIRM_TIME:
                     if "recontamination" not in steps_completed:
-                        print("  ⚠ Possible recontamination detected — wrist stayed near tap after drying")
+                        print("  ⚠ Possible recontamination detected — wrist near tap after drying")
                         log_step("recontamination")
             else:
                 recontamination_contact_start = 0.0
