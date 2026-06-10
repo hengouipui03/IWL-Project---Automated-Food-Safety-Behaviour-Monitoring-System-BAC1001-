@@ -98,6 +98,8 @@ rub_duration                 = 0.0
 last_rub_time                = 0.0
 dry_start                    = 0.0
 dry_duration                 = 0.0
+last_dry_time                = 0.0
+dry_confirm_count            = 0
 sink_entry_time              = 0.0
 recontamination_contact_start = 0.0
 steps_completed              = []
@@ -137,6 +139,9 @@ BODY_DRY_WINDOW           = 1.5
 RECONTAMINATION_MONITOR_TIME  = 8.0
 RECONTAMINATION_CONFIRM_TIME  = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
+DRY_CONFIRM_FRAMES            = 8    # frames of valid drying motion before count starts
+DRY_PAUSE_TOLERANCE           = 2.0  # seconds of stillness allowed mid-dry
+DRY_MOTION_THRESHOLD          = 5    # pixel displacement to count as drying motion
 
 # ── Frame skip for performance ───────────────────────────────────
 frame_count    = 0
@@ -149,9 +154,9 @@ def point_in_zone(px, py, zone):
 def wrist_in_zones(px, py, zone_type):
     return any(point_in_zone(px, py, z) for z in zones.get(zone_type, []))
 
-def wrists_moving(lw, rw):
-    lw_moved = abs(lw[0] - prev_lw[0]) + abs(lw[1] - prev_lw[1]) > MOTION_THRESHOLD
-    rw_moved = abs(rw[0] - prev_rw[0]) + abs(rw[1] - prev_rw[1]) > MOTION_THRESHOLD
+def wrists_moving(lw, rw, threshold=MOTION_THRESHOLD):
+    lw_moved = abs(lw[0] - prev_lw[0]) + abs(lw[1] - prev_lw[1]) > threshold
+    rw_moved = abs(rw[0] - prev_rw[0]) + abs(rw[1] - prev_rw[1]) > threshold
     return lw_moved or rw_moved
 
 def smooth_wrist(history, new_point):
@@ -169,9 +174,8 @@ def draw_zones(frame):
                         (z["x1"] + 4, z["y1"] + 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-def get_body_zones(kp, kp_conf):
-    body_zones = []
-
+def get_body_zone(kp, kp_conf):
+    """Single chest-width box from shoulders down to hip midpoint."""
     def get_kp(idx):
         if float(kp_conf[idx]) > KEYPOINT_CONFIDENCE:
             return (int(kp[idx][0]), int(kp[idx][1]))
@@ -181,58 +185,83 @@ def get_body_zones(kp, kp_conf):
     rs = get_kp(RIGHT_SHOULDER)
     lh = get_kp(LEFT_HIP)
     rh = get_kp(RIGHT_HIP)
-    lk = get_kp(LEFT_KNEE)
-    rk = get_kp(RIGHT_KNEE)
 
-    # Chest zone — between shoulders and mid torso
-    if ls and rs and lh and rh:
-        mid_torso_y = int((ls[1] + rs[1] + lh[1] + rh[1]) / 4)
-        body_zones.append(("chest",
-                           min(ls[0], rs[0]) - 20, min(ls[1], rs[1]),
-                           max(ls[0], rs[0]) + 20, mid_torso_y))
+    if not ls or not rs:
+        return None
 
-    # Waist zone — around hip landmarks
+    shoulder_w = abs(ls[0] - rs[0])
+    # Inset slightly from shoulder edges for a chest-width box
+    x1 = min(ls[0], rs[0]) + int(shoulder_w * 0.05)
+    x2 = max(ls[0], rs[0]) - int(shoulder_w * 0.05)
+    if x1 >= x2:
+        x1 = min(ls[0], rs[0])
+        x2 = max(ls[0], rs[0])
+    y1 = min(ls[1], rs[1])
+
+    # Bottom: hip midpoint = chest/abdomen; estimate if hips not visible
     if lh and rh:
-        body_zones.append(("waist",
-                           min(lh[0], rh[0]) - 20, min(lh[1], rh[1]) - 20,
-                           max(lh[0], rh[0]) + 20, max(lh[1], rh[1]) + 20))
+        y2 = int((lh[1] + rh[1]) / 2) + 10
+    else:
+        y2 = int(max(ls[1], rs[1]) + shoulder_w * 0.65)
 
-    # Thigh zone — between hips and knees
-    if lh and rh and lk and rk:
-        body_zones.append(("thigh",
-                           min(lh[0], rh[0]) - 20, max(lh[1], rh[1]),
-                           max(lh[0], rh[0]) + 20, int((lk[1] + rk[1]) / 2)))
+    return (x1, y1, x2, y2)
 
-    return body_zones
+def wrist_in_body_zone(px, py, box):
+    if box is None:
+        return False
+    x1, y1, x2, y2 = box
+    return x1 < px < x2 and y1 < py < y2
 
-def wrist_in_body_zone(px, py, body_zones):
-    for name, x1, y1, x2, y2 in body_zones:
-        if x1 < px < x2 and y1 < py < y2:
-            return name
-    return None
+def draw_body_zone(frame, box):
+    if box is None:
+        return
+    x1, y1, x2, y2 = box
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 100, 255), -1)
+    cv2.addWeighted(overlay, 0.10, frame, 0.90, 0, frame)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 120, 255), 2)
+    cv2.putText(frame, "body zone", (x1 + 4, y1 + 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 140, 255), 1)
+
+def draw_skeleton(frame, kp, kp_conf):
+    """Draw full skeleton every frame to stabilise keypoint confidence."""
+    SKELETON_EDGES = [
+        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),   # shoulders + arms
+        (5, 11), (6, 12), (11, 12),                  # torso
+        (11, 13), (13, 15), (12, 14), (14, 16),      # legs
+        (0, 1), (0, 2), (1, 3), (2, 4),              # face
+    ]
+    pts = {}
+    for i in range(len(kp_conf)):
+        if float(kp_conf[i]) > KEYPOINT_CONFIDENCE:
+            pts[i] = (int(kp[i][0]), int(kp[i][1]))
+            cv2.circle(frame, pts[i], 4, (180, 180, 180), -1)
+    for a, b in SKELETON_EDGES:
+        if a in pts and b in pts:
+            cv2.line(frame, pts[a], pts[b], (100, 100, 100), 1)
 
 def detect_oscillation(history):
+    """Count X+Y direction reversals — works for front-facing and top-down cameras."""
     if len(history) < 4:
         return False
     positions = list(history)
     reversals = 0
-    prev_dx = 0
+    prev_dx   = 0
+    prev_dy   = 0
     for i in range(1, len(positions)):
-        px, py, t = positions[i - 1]
+        px, py, _ = positions[i - 1]
         cx, cy, _ = positions[i]
         dx = cx - px
-        if abs(dx) < BODY_DRY_MIN_DISPLACEMENT:
-            continue
-        if prev_dx != 0 and ((dx > 0) != (prev_dx > 0)):
-            reversals += 1
-        prev_dx = dx
+        dy = cy - py
+        if abs(dx) >= BODY_DRY_MIN_DISPLACEMENT:
+            if prev_dx != 0 and ((dx > 0) != (prev_dx > 0)):
+                reversals += 1
+            prev_dx = dx
+        if abs(dy) >= BODY_DRY_MIN_DISPLACEMENT:
+            if prev_dy != 0 and ((dy > 0) != (prev_dy > 0)):
+                reversals += 1
+            prev_dy = dy
     return reversals >= BODY_DRY_MIN_REVERSALS
-
-def draw_body_zones(frame, body_zones):
-    for name, x1, y1, x2, y2 in body_zones:
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 100, 255), 1)
-        cv2.putText(frame, name, (x1 + 2, y1 + 14),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 100, 255), 1)
 
 def log_step(step):
     if step not in steps_completed:
@@ -297,6 +326,8 @@ def reset_session():
     last_rub_time                 = 0.0
     dry_start                     = 0.0
     dry_duration                  = 0.0
+    last_dry_time                 = 0.0
+    dry_confirm_count             = 0
     sink_entry_time               = 0.0
     recontamination_contact_start = 0.0
     steps_completed               = []
@@ -364,6 +395,9 @@ while True:
             rw_px = None
             rw_history.clear()
 
+        # Draw full skeleton every frame — improves keypoint confidence stability
+        draw_skeleton(frame, kp, kp_conf)
+
         valid_wrist_detected = lw_px is not None or rw_px is not None
         if valid_wrist_detected:
             last_seen = now
@@ -373,11 +407,14 @@ while True:
         in_sink    = in_sink_lw and in_sink_rw
         in_soap    = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "soap_dispenser")) or
                       (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "soap_dispenser")))
-        in_dry     = ((lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")) or
-                      (rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")))
+        in_dry_lw  = lw_px is not None and wrist_in_zones(lw_px[0], lw_px[1], "dryer")
+        in_dry_rw  = rw_px is not None and wrist_in_zones(rw_px[0], rw_px[1], "dryer")
+        in_dry     = in_dry_lw and in_dry_rw
 
         moving  = wrists_moving(lw_px, rw_px) if lw_px is not None and rw_px is not None else False
         rubbing = in_sink and moving
+        drying  = in_dry and (wrists_moving(lw_px, rw_px, DRY_MOTION_THRESHOLD)
+                              if lw_px is not None and rw_px is not None else False)
 
         # ── State machine ────────────────────────────────────────
         if state == IDLE:
@@ -446,45 +483,55 @@ while True:
         elif state == RINSING:
             log_step("rinse")
 
-            # Draw body skeleton overlay while in RINSING
-            body_zones = get_body_zones(kp, kp_conf)
-            draw_body_zones(frame, body_zones)
+            # Chest-width body box — shoulders to hip midpoint
+            body_box = get_body_zone(kp, kp_conf)
+            draw_body_zone(frame, body_box)
 
-            # Body-drying detection — wrist rubbing on chest, waist, or thigh
+            # Body-drying detection — wrist oscillating inside body box
             active_wrist = lw_px if lw_px is not None else rw_px
             if active_wrist is not None:
-                zone_hit = wrist_in_body_zone(active_wrist[0], active_wrist[1], body_zones)
-
+                zone_hit = wrist_in_body_zone(active_wrist[0], active_wrist[1], body_box)
                 if zone_hit:
                     body_dry_wrist_history.append((active_wrist[0], active_wrist[1], now))
                     if body_dry_start == 0.0:
                         body_dry_start = now
                     body_dry_duration = now - body_dry_start
-
                     if (body_dry_duration >= BODY_DRY_MIN_DURATION and
                             detect_oscillation(body_dry_wrist_history)):
                         if "body_drying" not in steps_completed:
                             log_step("body_drying")
-                            print(f"  ⚠ Body drying detected on {zone_hit} — possible contamination")
+                            print("  ⚠ Body drying detected — possible contamination")
                 else:
                     body_dry_start    = 0.0
                     body_dry_duration = 0.0
                     body_dry_wrist_history.clear()
 
-            # Only advance to DRYING once the wrist enters the dryer zone
+            # Transition to DRYING once both wrists enter the dryer zone
             if in_dry:
-                log_step("dry")  # pre-log; duration check happens in DRYING
-                state     = DRYING
-                dry_start = now
+                state             = DRYING
+                dry_start         = now
+                last_dry_time     = now
+                dry_confirm_count = 0
 
         elif state == DRYING:
-            if in_dry:
-                dry_duration += now - dry_start
-                dry_start     = now
-            else:
+            # Keep body box visible until drying is fully confirmed
+            if "dry" not in steps_completed:
+                body_box = get_body_zone(kp, kp_conf)
+                draw_body_zone(frame, body_box)
+
+            # Mirror rubbing algo: confirm frames, motion threshold, pause tolerance
+            if drying:
+                dry_confirm_count += 1
+                if dry_confirm_count >= DRY_CONFIRM_FRAMES:
+                    dry_duration  += now - dry_start
+                    last_dry_time  = now
                 dry_start = now
+            else:
+                dry_confirm_count = 0
+                dry_start         = now   # freeze count, don't reset it
 
             if dry_duration >= MIN_DRY_DURATION:
+                log_step("dry")
                 state        = RECONTAMINATION
                 result_timer = now
                 recontamination_contact_start = 0.0

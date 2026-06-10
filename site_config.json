@@ -1,33 +1,33 @@
 {
-  "site_name": "1u11",
+  "site_name": "1",
   "camera_id": "1",
   "camera_source": 0,
   "frame_width": 640,
   "frame_height": 480,
-  "min_wash_duration": 20,
+  "min_wash_duration": 18,
   "zones": {
     "sink_tap": [
       {
-        "x1": 19,
-        "y1": 53,
-        "x2": 227,
-        "y2": 466
+        "x1": 36,
+        "y1": 276,
+        "x2": 254,
+        "y2": 474
       }
     ],
     "soap_dispenser": [
       {
-        "x1": 239,
-        "y1": 53,
-        "x2": 421,
-        "y2": 469
+        "x1": 112,
+        "y1": 45,
+        "x2": 260,
+        "y2": 226
       }
     ],
     "dryer": [
       {
-        "x1": 428,
-        "y1": 39,
-        "x2": 618,
-        "y2": 205
+        "x1": 327,
+        "y1": 240,
+        "x2": 581,
+        "y2": 460
       }
     ]
   }
