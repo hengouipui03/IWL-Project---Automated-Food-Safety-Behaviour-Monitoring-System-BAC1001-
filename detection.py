@@ -263,14 +263,18 @@ def log_step(step):
 def conclude_session():
     global state, result_display, result_color, result_timer, technique_summary
 
-    has_soap  = "soap"  in steps_completed
-    has_rub   = "rub"   in steps_completed
-    has_rinse = "rinse" in steps_completed
-    has_dry   = "dry"   in steps_completed
+    has_soap            = "soap"            in steps_completed
+    has_rub             = "rub"             in steps_completed
+    has_rinse           = "rinse"           in steps_completed
+    has_dry             = "dry"             in steps_completed
+    has_recontamination = "recontamination" in steps_completed
+    has_body_drying     = "body_drying"     in steps_completed
 
     technique_summary = analyser.get_summary()
 
-    if has_soap and has_rub and has_rinse and has_dry and rub_duration >= min_wash_duration:
+    if (has_soap and has_rub and has_rinse and has_dry and
+            rub_duration >= min_wash_duration and
+            not has_recontamination and not has_body_drying):
         result_display = "PASS"
         result_color   = (0, 200, 0)
     else:
@@ -488,6 +492,10 @@ while True:
                             detect_oscillation(body_dry_wrist_history)):
                         if "body_drying" not in steps_completed:
                             log_step("body_drying")
+                            log_step("recontamination")
+                            state        = RECONTAMINATION
+                            result_timer = now
+                            recontamination_contact_start = 0.0
                             print("  ⚠ Body drying detected — possible contamination")
                 else:
                     body_dry_start    = 0.0
