@@ -169,7 +169,7 @@ def draw_zones(frame):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
 def get_body_zone(kp, kp_conf):
-    """Single chest-width box from shoulders down to hip midpoint."""
+    """Torso box — wider and taller to accommodate larger builds."""
     def get_kp(idx):
         if float(kp_conf[idx]) > KEYPOINT_CONFIDENCE:
             return (int(kp[idx][0]), int(kp[idx][1]))
@@ -184,17 +184,19 @@ def get_body_zone(kp, kp_conf):
         return None
 
     shoulder_w = abs(ls[0] - rs[0])
-    x1 = min(ls[0], rs[0]) + int(shoulder_w * 0.1)
-    x2 = max(ls[0], rs[0]) - int(shoulder_w * 0.1)
-    if x1 >= x2:
-        x1 = min(ls[0], rs[0])
-        x2 = max(ls[0], rs[0])
-    y1 = min(ls[1], rs[1])
+    # Expand 25% outward beyond each shoulder (was: trimming 10% inward)
+    x1 = min(ls[0], rs[0]) - int(shoulder_w * 0.25)
+    x2 = max(ls[0], rs[0]) + int(shoulder_w * 0.25)
+    # Slightly above shoulders to catch hands near chest/neck
+    y1 = min(ls[1], rs[1]) - int(shoulder_w * 0.15)
 
     if lh and rh:
-        y2 = int((lh[1] + rh[1]) / 2) + 10
+        # Extend 50% of shoulder_w below hip midpoint (was: stopping at hip + 10px)
+        hip_mid_y = int((lh[1] + rh[1]) / 2)
+        y2 = hip_mid_y + int(shoulder_w * 0.5)
     else:
-        y2 = int(max(ls[1], rs[1]) + shoulder_w * 0.65)
+        # Fallback: shoulder_w * 1.2 below shoulders (was: * 0.65)
+        y2 = int(max(ls[1], rs[1]) + shoulder_w * 1.2)
 
     return (x1, y1, x2, y2)
 
@@ -467,24 +469,66 @@ while True:
                 print("Rubbing complete — waiting for rinse / drying zone...")
 
         elif state == RINSING:
-            # log_step("rinse") moved here — only mark it once, not on entry
-            # (was previously at the top which caused instant skip to DRYING)
-            if "rinse" not in steps_completed:
-                log_step("rinse")
+            log_step("rinse")
 
             # Chest-width body box — visible from RINSING onwards
             body_box = get_body_zone(kp, kp_conf)
             draw_body_zone(frame, body_box)
 
-            # Body-drying detection — check BOTH wrists independently against body zone
-            # (was: only checking one wrist, missing the opposite hand wiping on body)
-            wrists_to_check = [w for w in (lw_px, rw_px) if w is not None]
+            # Body-drying detection — wrist oscillating on torso
+            active_wrist = lw_px if lw_px is not None else rw_px
+            if active_wrist is not None:
+                zone_hit = wrist_in_body_zone(active_wrist[0], active_wrist[1], body_box)
+                if zone_hit:
+                    body_dry_wrist_history.append((active_wrist[0], active_wrist[1], now))
+                    if body_dry_start == 0.0:
+                        body_dry_start = now
+                    body_dry_duration = now - body_dry_start
+                    if (body_dry_duration >= BODY_DRY_MIN_DURATION and
+                            detect_oscillation(body_dry_wrist_history)):
+                        if "body_drying" not in steps_completed:
+                            log_step("body_drying")
+                            log_step("recontamination")
+                            state        = RECONTAMINATION
+                            result_timer = now
+                            recontamination_contact_start = 0.0
+                            # Reset so RECONTAMINATION body-dry check starts fresh
+                            body_dry_start    = 0.0
+                            body_dry_duration = 0.0
+                            body_dry_wrist_history.clear()
+                            print("  ⚠ Body drying detected during rinse — recontamination")
+                else:
+                    body_dry_start    = 0.0
+                    body_dry_duration = 0.0
+                    body_dry_wrist_history.clear()
+
+            # Guard: only transition if body-dry hasn't already changed the state
+            if in_dry and state == RINSING:
+                state     = DRYING
+                dry_start = now
+
+        elif state == DRYING:
+            body_box = get_body_zone(kp, kp_conf)
+            draw_body_zone(frame, body_box)
+
+            # Dryer zone counter — runs as normal
+            if in_dry:
+                dry_duration += now - dry_start
+            dry_start = now
+
+            # ── Body-dry check — runs independently in parallel ──
+            # Exclude any wrist already in the dryer zone — normal drying
+            # motion there must never trigger the body-dry check
+            wrists_to_check = []
+            if lw_px is not None and not in_dry_lw:
+                wrists_to_check.append(lw_px)
+            if rw_px is not None and not in_dry_rw:
+                wrists_to_check.append(rw_px)
+
             any_wrist_on_body = any(
                 wrist_in_body_zone(w[0], w[1], body_box) for w in wrists_to_check
             )
-
             if any_wrist_on_body:
-                # Use whichever wrist is on the body for oscillation tracking
                 tracked = next(
                     w for w in wrists_to_check
                     if wrist_in_body_zone(w[0], w[1], body_box)
@@ -501,51 +545,70 @@ while True:
                         state        = RECONTAMINATION
                         result_timer = now
                         recontamination_contact_start = 0.0
-                        print("  ⚠ Body drying detected — possible contamination")
-            else:
-                # Grace period: only reset if wrist has been off body for >0.4s
-                # (was: resetting immediately on any single missed frame)
-                if body_dry_start > 0.0 and (now - body_dry_start) > 0.0:
-                    last_body_entry = body_dry_wrist_history[-1][2] if body_dry_wrist_history else 0.0
-                    if now - last_body_entry > 0.4:
                         body_dry_start    = 0.0
                         body_dry_duration = 0.0
                         body_dry_wrist_history.clear()
+                        print("  ⚠ Body drying detected during drying — recontamination")
+            else:
+                last_body_entry = body_dry_wrist_history[-1][2] if body_dry_wrist_history else 0.0
+                if now - last_body_entry > 0.4:
+                    body_dry_start    = 0.0
+                    body_dry_duration = 0.0
+                    body_dry_wrist_history.clear()
 
-            # Transition to DRYING once both wrists enter the dryer zone
-            if in_dry:
-                state     = DRYING
-                dry_start = now
-
-        elif state == DRYING:
-            # Body box stays visible until drying is confirmed
-            body_box = get_body_zone(kp, kp_conf)
-            draw_body_zone(frame, body_box)
-
-            # Both wrists in zone → count. Simple.
-            if in_dry:
-                dry_duration += now - dry_start
-            dry_start = now
-
-            if dry_duration >= MIN_DRY_DURATION:
+            # Only transition to RECONTAMINATION via dry completion if body-dry hasn't fired
+            if dry_duration >= MIN_DRY_DURATION and state == DRYING:
                 log_step("dry")
                 state        = RECONTAMINATION
                 result_timer = now
                 recontamination_contact_start = 0.0
+                body_dry_start    = 0.0
+                body_dry_duration = 0.0
+                body_dry_wrist_history.clear()
                 print("Drying complete — monitoring for recontamination...")
 
         elif state == RECONTAMINATION:
-            recontamination_contact = in_sink_lw or in_sink_rw
+            body_box = get_body_zone(kp, kp_conf)
+            draw_body_zone(frame, body_box)
 
+            # ── Check 1: tap touch ───────────────────────────────
+            recontamination_contact = in_sink_lw or in_sink_rw
             if recontamination_contact:
                 if recontamination_contact_start == 0.0:
                     recontamination_contact_start = now
                 if (now - recontamination_contact_start) >= RECONTAMINATION_CONFIRM_TIME:
                     if "recontamination" not in steps_completed:
-                        print("  ⚠ Possible recontamination detected — wrist near tap after drying")
+                        print("  ⚠ Recontamination — wrist near tap after drying")
                         log_step("recontamination")
             else:
                 recontamination_contact_start = 0.0
+
+            # ── Check 2: body drying after drying ────────────────
+            wrists_to_check = [w for w in (lw_px, rw_px) if w is not None]
+            any_wrist_on_body = any(
+                wrist_in_body_zone(w[0], w[1], body_box) for w in wrists_to_check
+            )
+            if any_wrist_on_body:
+                tracked = next(
+                    w for w in wrists_to_check
+                    if wrist_in_body_zone(w[0], w[1], body_box)
+                )
+                body_dry_wrist_history.append((tracked[0], tracked[1], now))
+                if body_dry_start == 0.0:
+                    body_dry_start = now
+                body_dry_duration = now - body_dry_start
+                if (body_dry_duration >= BODY_DRY_MIN_DURATION and
+                        detect_oscillation(body_dry_wrist_history)):
+                    if "body_drying" not in steps_completed:
+                        log_step("body_drying")
+                        log_step("recontamination")
+                        print("  ⚠ Recontamination — body drying detected after dryer")
+            else:
+                last_body_entry = body_dry_wrist_history[-1][2] if body_dry_wrist_history else 0.0
+                if now - last_body_entry > 0.4:
+                    body_dry_start    = 0.0
+                    body_dry_duration = 0.0
+                    body_dry_wrist_history.clear()
 
             if not valid_wrist_detected and (now - last_seen) > RECONTAMINATION_LEAVE_TIMEOUT:
                 conclude_session()
@@ -592,6 +655,10 @@ while True:
     cv2.putText(frame, f"State: {state}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (0, 255, 0) if person_detected else (0, 0, 255), 2)
+    raw_detected = last_keypoints is not None and len(last_keypoints) > 0
+    if raw_detected and not person_detected:
+        cv2.putText(frame, "LOW CONF — ignored", (10, 135),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
     cv2.putText(frame, f"Session: {elapsed:.1f}s", (10, 58),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
@@ -602,10 +669,18 @@ while True:
     if state == DRYING:
         cv2.putText(frame, f"Drying: {dry_duration:.1f}s / {MIN_DRY_DURATION}s",
                     (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 1)
+        bd_col = (0, 80, 255) if body_dry_duration > 0 else (150, 150, 150)
+        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  pts:{len(body_dry_wrist_history)}",
+                    (10, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.45, bd_col, 1)
 
     if state == RINSING:
         bd_col = (0, 80, 255) if body_dry_duration > 0 else (150, 150, 150)
-        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  rev:{len(body_dry_wrist_history)}pts",
+        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  pts:{len(body_dry_wrist_history)}",
+                    (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.45, bd_col, 1)
+
+    if state == RECONTAMINATION:
+        bd_col = (0, 80, 255) if body_dry_duration > 0 else (150, 150, 150)
+        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  pts:{len(body_dry_wrist_history)}",
                     (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.45, bd_col, 1)
 
     if state == SOAPING and sink_entry_time > 0 and "soap" not in steps_completed:
