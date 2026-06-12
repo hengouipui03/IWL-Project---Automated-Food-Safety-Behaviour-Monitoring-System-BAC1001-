@@ -4,12 +4,14 @@ Covers UC-01 through UC-07 from the requirements specification.
 Pure Flask + sqlite3 (no SQLAlchemy) — compatible with Python 3.13.
 """
 
-from flask import Flask, render_template, jsonify, request, session, redirect
+from flask import Flask, render_template, jsonify, request, session, redirect, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from functools import wraps
 import sqlite3
 import json
+import csv
+import io
 import os
 
 app = Flask(__name__)
@@ -267,6 +269,75 @@ def derive_status(result, confidence, conf_threshold):
 
 
 # ============================================================
+# DATA RETENTION  (SR-10 / SFR-10.1)  — GDPR enforcement
+# ============================================================
+# Two layers, matching the design's DataRetentionService:
+#   1. Query filtering: data older than the retention window is excluded
+#      from trends/reports/compare/incident listings, and the user is told
+#      how many records were withheld ("restrict access").
+#   2. Purge: a job that irreversibly removes expired records ("delete or
+#      anonymise PII"), logged to the audit trail.
+
+def get_retention_days():
+    conn = get_db()
+    row = conn.execute("SELECT value FROM settings WHERE key='retention_days'").fetchone()
+    conn.close()
+    try:
+        return int(row['value']) if row else DEFAULT_RETENTION_DAYS
+    except (TypeError, ValueError):
+        return DEFAULT_RETENTION_DAYS
+
+
+def set_retention_days(days):
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', ?)",
+                 (str(int(days)),))
+    conn.commit()
+    conn.close()
+
+
+def retention_cutoff_iso():
+    """ISO timestamp; records with timestamp < this are 'expired' (SFR-10.1)."""
+    return (datetime.now() - timedelta(days=get_retention_days())).isoformat()
+
+
+def retention_clause(alias='i'):
+    """SQL fragment + params to keep only non-expired rows."""
+    return f' AND {alias}.timestamp >= ? ', [retention_cutoff_iso()]
+
+
+def count_expired():
+    """How many incident records currently sit beyond the retention window."""
+    conn = get_db()
+    n = conn.execute('SELECT COUNT(*) n FROM incidents WHERE timestamp < ?',
+                     (retention_cutoff_iso(),)).fetchone()['n']
+    conn.close()
+    return n
+
+
+def purge_expired_data(triggered_by='system'):
+    """Irreversibly delete incident records past the retention period (SFR-10.1)."""
+    cutoff = retention_cutoff_iso()
+    conn = get_db()
+    n = conn.execute('SELECT COUNT(*) n FROM incidents WHERE timestamp < ?', (cutoff,)).fetchone()['n']
+    if n:
+        conn.execute('DELETE FROM incidents WHERE timestamp < ?', (cutoff,))
+        conn.commit()
+    conn.close()
+    if n:
+        # log via a lightweight direct insert (avoids needing a request context)
+        conn = get_db()
+        conn.execute('''INSERT INTO audit_logs (user_id, username, action, target_type, target_id, details, timestamp)
+                        VALUES (?,?,?,?,?,?,?)''',
+                     (None, triggered_by, 'PURGE_EXPIRED_DATA', 'incident', None,
+                      f'Deleted {n} record(s) older than {get_retention_days()} days (GDPR retention)',
+                      datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    return n
+
+
+# ============================================================
 # PAGES
 # ============================================================
 
@@ -364,10 +435,12 @@ def create_incident():
 
     status, risk, alerted = derive_status(result, confidence, conf_threshold)
 
+    # rub_duration: store at 1 decimal place to match detection.py's on-screen format
+    _rub = data.get('rub_duration')
     details = {
         'result': result,
         'steps': data.get('steps', []),
-        'rub_duration': data.get('rub_duration'),
+        'rub_duration': round(_rub, 1) if isinstance(_rub, (int, float)) else _rub,
     }
 
     c.execute('''INSERT INTO incidents (site_id, camera_id, behaviour_type, compliance_status,
@@ -468,10 +541,6 @@ def list_incidents():
         q += ' AND i.compliance_status = ?'; params.append(status)
     if behaviour:
         q += ' AND i.behaviour_type = ?'; params.append(behaviour)
-    #additional camera filter for dashboard
-    camera = request.args.get('camera')
-    if camera:
-        q += ' AND c.camera_id = ?'; params.append(camera)
     q += ' ORDER BY i.timestamp DESC LIMIT ?'; params.append(limit)
 
     conn = get_db()
@@ -518,8 +587,17 @@ def validate_incident(iid):
     reason = (data.get('reason') or '').strip()
     notes = data.get('notes', '')
 
+    valid_statuses = ('compliant', 'non_compliant', 'indeterminate', 'false_positive')
+    if new_status not in valid_statuses:
+        return jsonify({'error': f'status must be one of {valid_statuses}'}), 400
+
     if not reason:
         return jsonify({'error': 'A reclassification reason is required to finalise validation'}), 400
+
+    # Risk follows the validated outcome
+    risk_map = {'compliant': 'low', 'false_positive': 'low',
+                'indeterminate': 'medium', 'non_compliant': 'high'}
+    new_risk = risk_map[new_status]
 
     u = current_user()
     conn = get_db()
@@ -528,12 +606,14 @@ def validate_incident(iid):
         conn.close()
         return jsonify({'error': 'Not found'}), 404
 
+    # The validated outcome becomes the incident's status (so re-validation always
+    # takes effect), and risk is recalculated to match.
     conn.execute('''UPDATE incidents SET validated=1, validation_status=?, validation_reason=?,
                     validation_notes=?, validated_by=?, validated_at=?, alerted=0,
-                    compliance_status = CASE WHEN ? IN ('compliant','non_compliant') THEN ? ELSE compliance_status END
+                    compliance_status=?, risk_level=?
                     WHERE id=?''',
                  (new_status, reason, notes, u['id'], datetime.now().isoformat(),
-                  new_status, new_status, iid))
+                  new_status, new_risk, iid))
     conn.commit()
     conn.close()
     log_action('VALIDATE_INCIDENT', 'incident', iid, f'status={new_status}; reason={reason}')
@@ -552,20 +632,24 @@ def api_trends():
     behaviour = request.args.get('behaviour')
     since = (datetime.now() - timedelta(days=days)).isoformat()
     sfilter, sparams = visible_site_filter(u)
+    rclause, rparams = retention_clause('i')   # SFR-10.1: exclude expired data
 
     q = f'''SELECT DATE(i.timestamp) d,
             SUM(CASE WHEN compliance_status='compliant' THEN 1 ELSE 0 END) compliant,
             SUM(CASE WHEN compliance_status='non_compliant' THEN 1 ELSE 0 END) non_compliant
-            FROM incidents i WHERE i.timestamp >= ? {sfilter}'''
-    params = [since] + sparams
+            FROM incidents i WHERE i.timestamp >= ? {sfilter} {rclause}'''
+    params = [since] + sparams + rparams
     if behaviour:
         q += ' AND i.behaviour_type = ?'; params.append(behaviour)
     q += ' GROUP BY DATE(i.timestamp) ORDER BY d'
 
     conn = get_db()
     rows = conn.execute(q, params).fetchall()
-    total = conn.execute(f'SELECT COUNT(*) n FROM incidents i WHERE i.timestamp >= ? {sfilter}',
-                         [since] + sparams).fetchone()['n']
+    total = conn.execute(f'SELECT COUNT(*) n FROM incidents i WHERE i.timestamp >= ? {sfilter} {rclause}',
+                         [since] + sparams + rparams).fetchone()['n']
+    # how many in the requested window were withheld because they're past retention
+    withheld = conn.execute(f'SELECT COUNT(*) n FROM incidents i WHERE i.timestamp >= ? {sfilter} AND i.timestamp < ?',
+                            [since] + sparams + [retention_cutoff_iso()]).fetchone()['n']
     conn.close()
 
     series = [{'date': r['d'], 'compliant': r['compliant'],
@@ -585,6 +669,9 @@ def api_trends():
         'incomplete_msg': 'Insufficient historical data - results may be incomplete.' if incomplete else None,
         'stable': stable,
         'stable_msg': 'Compliance is stable - no significant trend detected.' if stable else None,
+        'retention_restricted': withheld > 0,
+        'retention_msg': (f'{withheld} record(s) beyond the {get_retention_days()}-day retention period '
+                          f'were deleted/anonymised per GDPR policy and are excluded.') if withheld else None,
     })
 
 
@@ -607,10 +694,19 @@ def api_report():
     params = [start, end + 'T23:59:59'] + sparams
     if behaviour:
         q += ' AND behaviour_type = ?'; params.append(behaviour)
+    # SFR-10.1: exclude data beyond the retention period from the report
+    cutoff = retention_cutoff_iso()
+    q += ' AND i.timestamp >= ?'; params.append(cutoff)
     q += ' GROUP BY behaviour_type, compliance_status, risk_level'
 
     conn = get_db()
     rows = conn.execute(q, params).fetchall()
+    # count how many in-range records were withheld due to retention
+    wq = f'SELECT COUNT(*) n FROM incidents i WHERE i.timestamp BETWEEN ? AND ? {sfilter} AND i.timestamp < ?'
+    wparams = [start, end + 'T23:59:59'] + sparams + [cutoff]
+    if behaviour:
+        wq += ' AND behaviour_type = ?'; wparams.append(behaviour)
+    retention_withheld = conn.execute(wq, wparams).fetchone()['n']
     conn.close()
 
     total = sum(r['n'] for r in rows)
@@ -628,6 +724,12 @@ def api_report():
     log_action('GENERATE_REPORT', 'report', None, f'{start}..{end} behaviour={behaviour or "all"}')
 
     withheld = is_auditor()
+    notices = []
+    if withheld:
+        notices.append('Some operational detail withheld under data-protection policy.')
+    if retention_withheld:
+        notices.append(f'{retention_withheld} record(s) beyond the {get_retention_days()}-day '
+                       f'retention period were excluded (deleted/anonymised per GDPR).')
     return jsonify({
         'generated_at': datetime.now().isoformat(),
         'generated_by': u['username'],
@@ -641,7 +743,66 @@ def api_report():
         'risk_distribution': risk,
         'withheld': withheld,
         'withheld_msg': 'Some operational detail withheld under data-protection policy.' if withheld else None,
+        'retention_restricted': retention_withheld > 0,
+        'notices': notices,
     })
+
+
+@app.route('/api/reports/export', methods=['POST'])
+@can('UC04')
+def api_report_export():
+    """CSV export of the incident-level data behind a report (UC-04, CSVExportStrategy).
+    Respects role-based site visibility and the GDPR retention window."""
+    u = current_user()
+    data = request.get_json()
+    start = data.get('start_date')
+    end = data.get('end_date')
+    behaviour = data.get('behaviour')
+    sfilter, sparams = visible_site_filter(u)
+    cutoff = retention_cutoff_iso()        # SFR-10.1: never export expired data
+
+    q = f'''SELECT i.id, i.timestamp, s.name AS site, c.camera_id AS camera,
+            i.behaviour_type, i.compliance_status, i.risk_level, i.confidence,
+            i.validated, v.username AS validator, i.validation_status, i.validation_reason
+            FROM incidents i
+            JOIN sites s ON s.id = i.site_id
+            LEFT JOIN cameras c ON c.id = i.camera_id
+            LEFT JOIN users v ON v.id = i.validated_by
+            WHERE i.timestamp BETWEEN ? AND ? {sfilter} AND i.timestamp >= ?'''
+    params = [start, end + 'T23:59:59'] + sparams + [cutoff]
+    if behaviour:
+        q += ' AND i.behaviour_type = ?'; params.append(behaviour)
+    q += ' ORDER BY i.timestamp DESC'
+
+    conn = get_db()
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+
+    auditor = is_auditor()   # SFR-6.X: auditors get reduced operational detail
+    out = io.StringIO()
+    w = csv.writer(out)
+    if auditor:
+        w.writerow(['Incident ID', 'Timestamp', 'Site', 'Behaviour',
+                    'Status', 'Risk', 'Validated', 'Validation Reason'])
+        for r in rows:
+            w.writerow([r['id'], r['timestamp'], r['site'], r['behaviour_type'],
+                        r['compliance_status'], r['risk_level'] or '',
+                        'yes' if r['validated'] else 'no', r['validation_reason'] or ''])
+    else:
+        w.writerow(['Incident ID', 'Timestamp', 'Site', 'Camera', 'Behaviour',
+                    'Status', 'Risk', 'Confidence', 'Validated', 'Validated By', 'Validation Reason'])
+        for r in rows:
+            w.writerow([r['id'], r['timestamp'], r['site'], r['camera'] or '',
+                        r['behaviour_type'], r['compliance_status'], r['risk_level'] or '',
+                        f"{r['confidence']:.2f}" if r['confidence'] is not None else '',
+                        'yes' if r['validated'] else 'no', r['validator'] or '',
+                        r['validation_reason'] or ''])
+
+    log_action('EXPORT_REPORT_CSV', 'report', None,
+               f'{start}..{end} behaviour={behaviour or "all"} rows={len(rows)}')
+    filename = f'compliance_report_{start}_to_{end}.csv'
+    return Response(out.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename={filename}'})
 
 
 # ============================================================
@@ -666,9 +827,9 @@ def create_rule():
         threshold = float(data.get('alert_threshold', 50))
         conf = float(data.get('confidence_threshold', 0.5))
     except (TypeError, ValueError):
-        return jsonify({'error': 'Thresholds must be numbers'}), 400
+        return jsonify({'error': 'Error : Either Alert threshold and/or Confidence threshold is set wrongly. Please check and try again'}), 400
     if not (0 <= threshold <= 100) or not (0 <= conf <= 1):
-        return jsonify({'error': 'alert_threshold must be 0-100 and confidence_threshold 0-1'}), 400
+        return jsonify({'error': 'Error : Either Alert threshold and/or Confidence threshold is set wrongly. Please check and try again'}), 400
     if data.get('behaviour_type') not in BEHAVIOUR_TYPES:
         return jsonify({'error': f'behaviour_type must be one of {BEHAVIOUR_TYPES}'}), 400
 
@@ -702,14 +863,15 @@ def modify_rule(rid):
         conf = float(data.get('confidence_threshold', 0.5))
     except (TypeError, ValueError):
         conn.close()
-        return jsonify({'error': 'Thresholds must be numbers'}), 400
+        return jsonify({'error': 'Error : Either Alert threshold and/or Confidence threshold is set wrongly. Please check and try again'}), 400
     if not (0 <= threshold <= 100) or not (0 <= conf <= 1):
         conn.close()
-        return jsonify({'error': 'Invalid threshold ranges'}), 400
+        return jsonify({'error': 'Error : Either Alert threshold and/or Confidence threshold is set wrongly. Please check and try again'}), 400
 
-    conn.execute('''UPDATE rules SET rule_name=?, description=?, alert_threshold=?,
-                    confidence_threshold=?, enabled=?, updated_at=? WHERE id=?''',
-                 (data['rule_name'], data.get('description', ''), threshold, conf,
+    conn.execute('''UPDATE rules SET rule_name=?, behaviour_type=?, site_id=?, description=?,
+                    alert_threshold=?, confidence_threshold=?, enabled=?, updated_at=? WHERE id=?''',
+                 (data['rule_name'], data.get('behaviour_type'), data.get('site_id'),
+                  data.get('description', ''), threshold, conf,
                   1 if data.get('enabled', True) else 0, datetime.now().isoformat(), rid))
     conn.commit(); conn.close()
     log_action('UPDATE_RULE', 'rule', rid, data.get('rule_name'))
@@ -859,23 +1021,55 @@ def api_audit():
 def api_behaviours():
     return jsonify(BEHAVIOUR_TYPES)
 
-#added for multiple camera support - list cameras for dropdowns etc
-@app.route('/api/cameras')
-@login_required
-def api_cameras():
+
+# ============================================================
+# DATA RETENTION ENDPOINTS  (SR-10 / SFR-10.1)
+# ============================================================
+
+@app.route('/api/retention', methods=['GET'])
+@can('UC05')           # admin + senior may view the policy
+def api_retention_get():
+    return jsonify({
+        'retention_days': get_retention_days(),
+        'cutoff': retention_cutoff_iso(),
+        'expired_pending_purge': count_expired(),
+    })
+
+
+@app.route('/api/retention', methods=['PUT'])
+@can('UC05')
+def api_retention_set():
+    # only admins may change the policy (senior can view, not edit)
     u = current_user()
-    conn = get_db()
-    if u['site_id']:
-        rows = conn.execute(
-            'SELECT * FROM cameras WHERE site_id = ? ORDER BY camera_id',
-            (u['site_id'],)
-        ).fetchall()
-    else:
-        rows = conn.execute('SELECT * FROM cameras ORDER BY camera_id').fetchall()
-    conn.close()
-    return jsonify([dict(r) for r in rows])
+    if u['role'] != 'admin':
+        return jsonify({'error': 'Only an administrator can change the retention policy'}), 403
+    data = request.get_json()
+    try:
+        days = int(data.get('retention_days'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'retention_days must be a whole number'}), 400
+    if not (1 <= days <= 3650):
+        return jsonify({'error': 'retention_days must be between 1 and 3650'}), 400
+    set_retention_days(days)
+    log_action('UPDATE_RETENTION_POLICY', 'settings', None, f'retention_days={days}')
+    return jsonify({'success': True, 'retention_days': days})
+
+
+@app.route('/api/retention/purge', methods=['POST'])
+@can('UC05')
+def api_retention_purge():
+    u = current_user()
+    if u['role'] != 'admin':
+        return jsonify({'error': 'Only an administrator can run a purge'}), 403
+    deleted = purge_expired_data(triggered_by=u['username'])
+    return jsonify({'success': True, 'deleted': deleted})
+
 
 if __name__ == '__main__':
     init_db()
     seed_data()
+    # Enforce retention on startup (SFR-10.1): purge anything already expired.
+    purged = purge_expired_data(triggered_by='startup')
+    if purged:
+        print(f'Retention: purged {purged} expired record(s) on startup.')
     app.run(debug=True, port=5002)

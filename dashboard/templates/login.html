@@ -72,11 +72,11 @@
       <div class="demo">
         <p>Demo accounts &middot; click to fill</p>
         <div class="accts">
-          <span class="acct" onclick="fill('manager')">manager</span>
-          <span class="acct" onclick="fill('quality')">quality</span>
-          <span class="acct" onclick="fill('senior')">senior</span>
-          <span class="acct" onclick="fill('auditor')">auditor</span>
-          <span class="acct" onclick="fill('admin')">admin</span>
+          <span class="acct" onclick="fill('manager')">Manager</span>
+          <span class="acct" onclick="fill('quality')">Quality</span>
+          <span class="acct" onclick="fill('senior')">Senior</span>
+          <span class="acct" onclick="fill('auditor')">Auditor</span>
+          <span class="acct" onclick="fill('admin')">Admin</span>
         </div>
       </div>
     </div>
@@ -85,9 +85,9 @@
       <div class="hint">Enter your credentials to access the dashboard.</div>
       <div class="err" id="err"></div>
       <label>Username</label>
-      <input id="username" autocomplete="username" placeholder="manager">
+      <input id="username" autocomplete="username">
       <label>Password</label>
-      <input id="password" type="password" autocomplete="current-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" onkeydown="if(event.key==='Enter')doLogin()">
+      <input id="password" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
       <button id="btn" onclick="doLogin()">Sign in</button>
     </div>
   </div>
