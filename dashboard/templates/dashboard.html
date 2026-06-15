@@ -30,6 +30,7 @@
   nav a:hover{background:var(--panel2);color:var(--ink)}
   nav a.active{background:rgba(22,160,133,.14);color:var(--teal2)}
   nav a .ico{width:18px;text-align:center;font-size:15px}
+  nav .uc{font-family:'IBM Plex Mono',monospace;font-size:9.5px;margin-left:auto;opacity:.5}
   .navsec{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);
     text-transform:uppercase;letter-spacing:.14em;padding:14px 14px 6px;opacity:.7}
   .me{padding:14px 16px;border-top:1px solid var(--line);font-size:12px}
@@ -132,7 +133,7 @@
   <div class="toast" id="toast"></div>
 
 <script>
-let ME=null, behaviours=['handwashing','ppe','allergen'], sites=[], cameras=[], trendChart=null, cmpChart=null;
+let ME=null, behaviours=['handwashing','ppe','allergen'], sites=[], trendChart=null, cmpChart=null;
 
 const NAV=[
   {uc:'UC01', id:'dashboard', label:'Daily Dashboard',  ico:'\u25A0'},
@@ -177,42 +178,40 @@ async function boot(){
   // first accessible view
   const first=NAV.find(n=>ME.access.includes(n.uc));
   go(first?first.id:'dashboard');
-
-  //cameras
-  try{cameras=await api('/api/cameras');}catch(e){}
 }
 
 function setActive(id){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===id));}
 function go(id){setActive(id);({dashboard:viewDashboard,incidents:viewIncidents,trends:viewTrends,reports:viewReports,compare:viewCompare,rules:viewRules,users:viewUsers}[id])();}
 
-function behaviourOptions(sel){return ['<option value="">All behaviours</option>'].concat(behaviours.map(b=>`<option ${sel===b?'selected':''} value="${b}">${b}</option>`)).join('');}
+function behaviourOptions(sel){return ['<option value="">All behaviours</option>'].concat(behaviours.map(b=>`<option ${sel===b?'selected':''} value="${b}">${prettyBehaviour(b)}</option>`)).join('');}
+function prettyBehaviour(b){
+  const m={handwashing:'Handwashing', allergen:'Allergen', ppe:'Personal Protective Equipment'};
+  return m[b] || (b ? b.charAt(0).toUpperCase()+b.slice(1) : b);
+}
 
-/* ---------- DASHBOARD ---------- */
+/* ---------- UC-01 DASHBOARD ---------- */
 async function viewDashboard(){
   const v=document.getElementById('view');
   v.innerHTML=`<div class="head"><div><h2>Daily Compliance Dashboard</h2>
     <div class="desc">Current food-safety compliance status and active alerts.</div></div>
-    <div class="controls"><select id="dDays" onchange="viewDashboard()">
+    <div class="controls"><select id="dDays" onchange="loadDashboard()">
       <option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option>
-    </select>
-    <select id="dCam" onchange="viewDashboard()">
-      <option value="">All cameras</option>
-      ${cameras.map(c=>`<option value="${c.camera_id}">${c.camera_id}</option>`).join('')}
-    </select>
-    </div></div><div id="dBody"><div class="empty">Loading…</div></div>`;
+    </select></div></div><div id="dBody"><div class="empty">Loading…</div></div>`;
+  loadDashboard();
+}
+async function loadDashboard(){
   const days=document.getElementById('dDays').value||1;
-  document.getElementById('dDays').value=days;
   let d;try{d=await api('/api/dashboard?days='+days);}catch(e){document.getElementById('dBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
   const banner = d.normal_status
     ? `<div class="banner ok">&#10003; Normal compliance status — no active alerts in this period.</div>`
     : `<div class="banner warn">&#9888; ${d.alerts.length} active alert(s) require review.</div>`;
-  let beh=d.by_behaviour.map(b=>`<div class="card"><div class="stat"><div class="label">${b.behaviour}</div>
+  let beh=d.by_behaviour.map(b=>`<div class="card"><div class="stat"><div class="label">${prettyBehaviour(b.behaviour)}</div>
     <div class="val">${b.rate}<small>%</small></div></div>
     <div class="bar"><div style="width:${b.rate}%"></div></div>
     <div class="desc" style="margin-top:8px">${b.compliant}/${b.total} compliant</div></div>`).join('')
     || `<div class="empty">No behaviour data yet.</div>`;
   let alerts = d.alerts.length ? `<table><thead><tr><th>Time</th><th>Behaviour</th><th>Site</th><th>Camera</th><th>Risk</th><th></th></tr></thead><tbody>`+
-    d.alerts.map(a=>`<tr><td class="mono">${fmtTime(a.timestamp)}</td><td>${a.behaviour_type}</td>
+    d.alerts.map(a=>`<tr><td class="mono">${fmtTime(a.timestamp)}</td><td>${prettyBehaviour(a.behaviour_type)}</td>
       <td>${esc(a.site)}</td><td class="mono">${esc(a.camera||'—')}</td>
       <td class="risk-${a.risk_level}">${a.risk_level}</td>
       <td>${ME.access.includes('UC02')?`<button class="btn sm ghost" onclick="openIncident(${a.id})">Review</button>`:''}</td></tr>`).join('')
@@ -228,7 +227,7 @@ async function viewDashboard(){
     <h3 class="section">Active Alerts</h3><div class="card">${alerts}</div>`;
 }
 
-/* ---------- INCIDENTS ---------- */
+/* ---------- UC-02 INCIDENTS ---------- */
 async function viewIncidents(){
   const v=document.getElementById('view');
   v.innerHTML=`<div class="head"><div><h2>Review &amp; Validate Incidents</h2>
@@ -237,21 +236,18 @@ async function viewIncidents(){
       <select id="fStatus" onchange="loadIncidents()">
         <option value="">All statuses</option><option value="compliant">Compliant</option>
         <option value="non_compliant">Non-compliant</option><option value="unable_to_assess">Unable to assess</option>
+        <option value="indeterminate">Indeterminate</option><option value="false_positive">False positive</option>
       </select>
       <select id="fBeh" onchange="loadIncidents()">${behaviourOptions('')}</select>
-      <select id="fCam" onchange="loadIncidents()">
-        <option value="">All cameras</option>
-        ${cameras.map(c=>`<option value="${c.camera_id}">${c.camera_id}</option>`).join('')}
-      </select>
     </div></div><div class="card" id="incBody"><div class="empty">Loading…</div></div>`;
   loadIncidents();
 }
 async function loadIncidents(){
-  const s=document.getElementById('fStatus').value, b=document.getElementById('fBeh').value, cam=document.getElementById('fCam').value;
-  let rows;try{rows=await api(`/api/incidents?status=${s}&behaviour=${b}&camera=${cam}&limit=200`);}catch(e){document.getElementById('incBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
+  const s=document.getElementById('fStatus').value, b=document.getElementById('fBeh').value;
+  let rows;try{rows=await api(`/api/incidents?status=${s}&behaviour=${b}&limit=200`);}catch(e){document.getElementById('incBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
   if(!rows.length){document.getElementById('incBody').innerHTML=`<div class="empty">No incidents found.</div>`;return;}
   document.getElementById('incBody').innerHTML=`<table><thead><tr><th>Time</th><th>Behaviour</th><th>Status</th><th>Risk</th><th>Conf.</th><th>Site</th><th>Validated</th><th></th></tr></thead><tbody>`+
-    rows.map(r=>`<tr><td class="mono">${fmtTime(r.timestamp)}</td><td>${r.behaviour_type}</td>
+    rows.map(r=>`<tr><td class="mono">${fmtTime(r.timestamp)}</td><td>${prettyBehaviour(r.behaviour_type)}</td>
       <td><span class="pill ${r.compliance_status}">${statusLabel(r.compliance_status)}</span></td>
       <td class="risk-${r.risk_level}">${r.risk_level||'—'}</td>
       <td class="mono">${r.confidence!=null?(r.confidence*100).toFixed(0)+'%':'—'}</td>
@@ -260,26 +256,64 @@ async function loadIncidents(){
       <td><button class="btn sm ghost" onclick="openIncident(${r.id})">${ME.read_only?'View':'Review'}</button></td></tr>`).join('')
     +`</tbody></table>`;
 }
+function buildEvidence(det, r){
+  const steps = det.steps || [];
+  const expected = [['soap','Soap applied'],['rub','Scrubbed hands'],['rinse','Rinsed under tap'],['dry','Dried hands']];
+  const checklist = expected.map(([k,label])=>{
+    const done = steps.includes(k);
+    const dur = (k==='rub' && det.rub_duration!=null) ? ` <span class="mono" style="font-size:11px;color:var(--muted)">(${Number(det.rub_duration).toFixed(1)}s)</span>` : '';
+    return `<div style="display:flex;align-items:center;gap:9px;padding:5px 0;font-size:13px">
+      <span style="color:${done?'var(--green)':'var(--red)'};font-weight:700;width:14px">${done?'\u2713':'\u2717'}</span>
+      <span style="${done?'':'color:var(--muted)'}">${label}${dur}</span></div>`;
+  }).join('');
+
+  const flags = [];
+  if(steps.includes('recontamination')) flags.push('Recontamination \u2014 hands touched tap/sink after drying');
+  if(steps.includes('body_drying')) flags.push('Body drying \u2014 hands wiped on body instead of the dryer');
+  const flagHtml = flags.length ? flags.map(f=>`<div class="banner warn" style="margin:6px 0;padding:9px 12px;font-size:12.5px">&#9888; ${f}</div>`).join('') : '';
+
+  const missing = expected.filter(([k])=>!steps.includes(k)).map(([,l])=>l.toLowerCase());
+  let assessment;
+  const res = (det.result||'').toUpperCase();
+  if(res==='PASS') assessment='All required steps completed and no contamination flags \u2014 wash meets the standard.';
+  else if(res==='MISSED') assessment='No handwashing steps were completed before the person left the area.';
+  else if(missing.length) assessment=`Incomplete wash \u2014 missing: ${missing.join(', ')}.`+(flags.length?' Contamination flag(s) also raised.':'');
+  else if(flags.length) assessment='All steps present but a contamination flag was raised, so the wash did not pass.';
+  else assessment='Wash did not meet the required criteria.';
+
+  const footage = r.evidence_url
+    ? `<a href="${esc(r.evidence_url)}" target="_blank" class="mono" style="color:var(--teal2)">View footage segment</a>`
+    : `<span class="desc">No CCTV clip linked \u2014 detection metadata only</span>`;
+
+  return `<h3 class="section" style="margin:18px 0 10px;font-size:13px">Evidence</h3>
+    <div class="card" style="padding:14px;background:var(--panel2)">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Handwashing steps</div>
+      ${checklist}
+      ${flagHtml}
+      <div class="kv" style="margin-top:8px"><span>Detection result</span><span class="mono">${esc(det.result||'\u2014')}</span></div>
+      <div class="kv"><span>Confidence</span><span class="mono">${r.confidence!=null?(r.confidence*100).toFixed(0)+'%':'\u2014'}</span></div>
+      <div class="kv"><span>Footage</span><span>${footage}</span></div>
+      <div style="margin-top:10px;font-size:12.5px;color:var(--ink);line-height:1.5">${assessment}</div>
+    </div>`;
+}
+
 async function openIncident(id){
   let r;try{r=await api('/api/incidents/'+id);}catch(e){toast(e.message);return;}
   const det=r.details||{};
-  const steps=(det.steps||[]).join(', ')||'—';
   const ro=ME.read_only;
   const box=document.getElementById('modalBox');
-  box.innerHTML=`<h3>Incident #${r.id}</h3><div class="msub">${r.behaviour_type} · ${esc(r.site_name)} · ${esc(r.camera_code||'—')}</div>
+  box.innerHTML=`<h3>Incident #${r.id}</h3><div class="msub">${prettyBehaviour(r.behaviour_type)} · ${esc(r.site_name)} · ${esc(r.camera_code||'—')}</div>
     <div class="kv"><span>Detected</span><span class="mono">${fmtTime(r.timestamp)}</span></div>
     <div class="kv"><span>Status</span><span class="pill ${r.compliance_status}">${statusLabel(r.compliance_status)}</span></div>
     <div class="kv"><span>Risk level</span><span class="risk-${r.risk_level}">${r.risk_level||'—'}</span></div>
-    <div class="kv"><span>Confidence</span><span class="mono">${r.confidence!=null?(r.confidence*100).toFixed(0)+'%':'—'}</span></div>
-    <div class="kv"><span>Detection result</span><span class="mono">${esc(det.result||'—')}</span></div>
-    <div class="kv"><span>Steps completed</span><span class="mono">${esc(steps)}</span></div>
-    <div class="kv"><span>Rub duration</span><span class="mono">${det.rub_duration!=null?det.rub_duration+'s':'—'}</span></div>
-    ${r.validated?`<div class="kv"><span>Validated by</span><span>${esc(r.validator_name||'')} · ${fmtTime(r.validated_at)}</span></div>
+    ${buildEvidence(det, r)}
+    ${r.validated?`<div class="kv" style="margin-top:14px"><span>Validated by</span><span>${esc(r.validator_name||'')} · ${fmtTime(r.validated_at)}</span></div>
       <div class="kv"><span>Reason</span><span>${esc(r.validation_reason||'—')}</span></div>
       <div class="kv"><span>Notes</span><span>${esc(r.validation_notes||'—')}</span></div>`:''}
     ${ro?`<div class="banner info" style="margin-top:18px">Read-only access — auditors cannot modify incidents.</div>
        <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`
-    :`<label>Reclassify status</label>
+    :`<h3 class="section" style="margin:18px 0 10px;font-size:13px">Validate</h3>
+      <label>Reclassify status</label>
       <select id="vStatus">
         <option value="non_compliant">Non-compliant</option>
         <option value="compliant">Compliant</option>
@@ -287,7 +321,7 @@ async function openIncident(id){
         <option value="false_positive">False positive</option>
       </select>
       <label>Reclassification reason (required)</label>
-      <input id="vReason" placeholder="e.g. Confirmed via footage / mis-detection">
+      <input id="vReason" placeholder="e.g. Confirmed via evidence / mis-detection">
       <label>Notes (optional)</label>
       <textarea id="vNotes" rows="2" placeholder="Additional annotation"></textarea>
       <div class="modal-actions">
@@ -307,7 +341,7 @@ async function submitValidation(id){
   closeModal();toast('Incident validated');loadIncidents();
 }
 
-/* ---------- TRENDS ---------- */
+/* ---------- UC-03 TRENDS ---------- */
 async function viewTrends(){
   const v=document.getElementById('view');
   v.innerHTML=`<div class="head"><div><h2>Behaviour Trends</h2>
@@ -327,6 +361,7 @@ async function loadTrends(){
   let bn='';
   if(d.incomplete)bn+=`<div class="banner warn">&#9888; ${d.incomplete_msg}</div>`;
   if(d.stable)bn+=`<div class="banner ok">&#10003; ${d.stable_msg}</div>`;
+  if(d.retention_restricted)bn+=`<div class="banner info">&#9432; ${d.retention_msg}</div>`;
   document.getElementById('tBanner').innerHTML=bn;
   const labels=d.data.map(x=>x.date), rates=d.data.map(x=>x.rate);
   if(trendChart)trendChart.destroy();
@@ -342,7 +377,7 @@ async function loadTrends(){
     +`</tbody></table></div>`:'';
 }
 
-/* ---------- REPORTS ---------- */
+/* ---------- UC-04 REPORTS ---------- */
 async function viewReports(){
   const today=new Date().toISOString().slice(0,10);
   const monthAgo=new Date(Date.now()-30*864e5).toISOString().slice(0,10);
@@ -354,17 +389,30 @@ async function viewReports(){
         <div><label style="font-size:11.5px;color:var(--muted)">Start date</label><input type="date" id="rStart" value="${monthAgo}"></div>
         <div><label style="font-size:11.5px;color:var(--muted)">End date</label><input type="date" id="rEnd" value="${today}"></div>
         <div><label style="font-size:11.5px;color:var(--muted)">Behaviour</label><select id="rBeh">${behaviourOptions('')}</select></div>
-        <div><button class="btn" onclick="genReport()">Generate report</button></div>
+        <div><button class="btn" onclick="genReport()">Generate</button></div>
       </div>
     </div><div id="rOut"></div>`;
+}
+async function exportReportCsv(){
+  const body={start_date:document.getElementById('rStart').value,end_date:document.getElementById('rEnd').value,behaviour:document.getElementById('rBeh').value};
+  try{
+    const r=await fetch('/api/reports/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){const e=await r.json().catch(()=>({}));toast(e.error||'Export failed');return;}
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=`compliance_report_${body.start_date}_to_${body.end_date}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast('CSV downloaded');
+  }catch(e){toast('Export failed');}
 }
 async function genReport(){
   const body={start_date:document.getElementById('rStart').value,end_date:document.getElementById('rEnd').value,behaviour:document.getElementById('rBeh').value};
   let d;try{d=await api('/api/reports',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}catch(e){document.getElementById('rOut').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
-  const beh=Object.entries(d.by_behaviour).map(([k,vv])=>`<tr><td>${k}</td><td>${vv.total}</td><td>${vv.compliant}</td>
+  const beh=Object.entries(d.by_behaviour).map(([k,vv])=>`<tr><td>${prettyBehaviour(k)}</td><td>${vv.total}</td><td>${vv.compliant}</td>
     <td>${vv.total?Math.round(vv.compliant/vv.total*100):0}%</td></tr>`).join('')||`<tr><td colspan="4" class="empty">No data</td></tr>`;
   document.getElementById('rOut').innerHTML=`
-    ${d.withheld?`<div class="banner info" style="margin-top:18px">&#9432; ${d.withheld_msg}</div>`:''}
+    ${(d.notices||[]).map(n=>`<div class="banner info" style="margin-top:18px">&#9432; ${n}</div>`).join('')}
     <h3 class="section">Report · ${esc(d.period)}</h3>
     <div class="grid g4">
       <div class="card stat"><div class="label">Total Events</div><div class="val">${d.total_events}</div></div>
@@ -381,10 +429,11 @@ async function genReport(){
       </tbody></table></div>
     </div>
     <div class="desc" style="margin-top:14px">Generated by ${esc(d.generated_by)} · ${fmtTime(d.generated_at)} ·
-      <button class="btn sm ghost" onclick="window.print()">Print / export PDF</button></div>`;
+      <button class="btn sm ghost" onclick="window.print()">Print / PDF</button>
+      <button class="btn sm ghost" onclick="exportReportCsv()">Export CSV</button></div>`;
 }
 
-/* ---------- COMPARE ---------- */
+/* ---------- UC-06 COMPARE ---------- */
 async function viewCompare(){
   const v=document.getElementById('view');
   v.innerHTML=`<div class="head"><div><h2>Compare Compliance Across Sites</h2>
@@ -415,25 +464,57 @@ async function loadCompare(){
     +`</tbody></table></div>`;
 }
 
-/* ---------- RULES ---------- */
+/* ---------- UC-05 RULES ---------- */
 async function viewRules(){
   const v=document.getElementById('view');
   v.innerHTML=`<div class="head"><div><h2>Monitoring Rules &amp; Alerts</h2>
     <div class="desc">Configure monitored behaviours, alert thresholds and detection sensitivity.</div></div>
     <div class="controls"><button class="btn" onclick="openRule()">+ New rule</button></div></div>
-    <div class="card" id="rulesBody"><div class="empty">Loading…</div></div>`;
+    <div class="card" id="rulesBody"><div class="empty">Loading…</div></div>
+    <h3 class="section">Data Retention (GDPR)</h3>
+    <div class="card" id="retentionBody"><div class="empty">Loading…</div></div>`;
   loadRules();
+  loadRetention();
+}
+async function loadRetention(){
+  let d;try{d=await api('/api/retention');}catch(e){document.getElementById('retentionBody').innerHTML=`<div class="empty">${e.message}</div>`;return;}
+  const isAdmin = ME.role==='admin';
+  document.getElementById('retentionBody').innerHTML=`
+    <div class="desc" style="margin-bottom:14px">Compliance records older than the retention period are excluded from trends and reports, and permanently purged in line with GDPR. Cutoff: <span class="mono">${new Date(d.cutoff).toLocaleDateString()}</span></div>
+    <div class="grid g3">
+      <div><label style="font-size:11.5px;color:var(--muted)">Retention period (days)</label>
+        <input type="number" id="retDays" min="1" max="3650" value="${d.retention_days}" ${isAdmin?'':'disabled'}></div>
+      <div><label style="font-size:11.5px;color:var(--muted)">Records pending purge</label>
+        <div class="val mono" style="font-size:22px;color:${d.expired_pending_purge?'var(--amber)':'var(--green)'}">${d.expired_pending_purge}</div></div>
+      <div style="display:flex;gap:8px;align-items:end">
+        ${isAdmin?`<button class="btn" onclick="saveRetention()">Save policy</button>
+          <button class="btn ghost" onclick="runPurge()">Purge now</button>`
+          :'<div class="desc">View only — admin can change this.</div>'}
+      </div>
+    </div>`;
+}
+async function saveRetention(){
+  const days=document.getElementById('retDays').value;
+  try{await api('/api/retention',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention_days:days})});}
+  catch(e){toast(e.message);return;}
+  toast('Retention policy updated');loadRetention();
+}
+async function runPurge(){
+  if(!confirm('Permanently delete all records beyond the retention period? This cannot be undone.'))return;
+  let d;try{d=await api('/api/retention/purge',{method:'POST'});}catch(e){toast(e.message);return;}
+  toast(`Purged ${d.deleted} expired record(s)`);loadRetention();
 }
 async function loadRules(){
   let rows;try{rows=await api('/api/rules');}catch(e){document.getElementById('rulesBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
   if(!rows.length){document.getElementById('rulesBody').innerHTML=`<div class="empty">No rules configured.</div>`;return;}
-  document.getElementById('rulesBody').innerHTML=`<table><thead><tr><th>Rule</th><th>Behaviour</th><th>Site</th><th>Alert thresh.</th><th>Conf. thresh.</th><th>Status</th><th></th></tr></thead><tbody>`+
-    rows.map(r=>`<tr><td>${esc(r.rule_name)}<div class="desc">${esc(r.description||'')}</div></td>
-      <td>${r.behaviour_type}</td><td>${esc(r.site_name||'All sites')}</td>
+  document.getElementById('rulesBody').innerHTML=`<table><thead><tr><th>Rule</th><th>Description</th><th>Behaviour</th><th>Site</th><th>Alert thresh.</th><th>Conf. thresh.</th><th>Status</th><th></th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td>${esc(r.rule_name)}</td>
+      <td class="desc">${esc(r.description||'—')}</td>
+      <td>${prettyBehaviour(r.behaviour_type)}</td><td>${esc(r.site_name||'All sites')}</td>
       <td class="mono">${r.alert_threshold}</td><td class="mono">${r.confidence_threshold}</td>
       <td>${r.enabled?'<span class="pill compliant">enabled</span>':'<span class="pill unable_to_assess">disabled</span>'}</td>
       <td><button class="btn sm ghost" onclick='openRule(${JSON.stringify(r)})'>Edit</button>
-          <button class="btn sm danger" onclick="delRule(${r.id})">Del</button></td></tr>`).join('')
+          <button class="btn sm danger" onclick="delRule(${r.id})">Delete</button></td></tr>`).join('')
     +`</tbody></table>`;
 }
 function openRule(r){
@@ -441,7 +522,7 @@ function openRule(r){
   const box=document.getElementById('modalBox');
   box.innerHTML=`<h3>${r.id?'Edit':'New'} rule</h3><div class="msub">Define a monitored behaviour and its alert thresholds.</div>
     <label>Rule name</label><input id="ruName" value="${esc(r.rule_name||'')}">
-    <label>Behaviour</label><select id="ruBeh">${behaviours.map(b=>`<option ${r.behaviour_type===b?'selected':''}>${b}</option>`).join('')}</select>
+    <label>Behaviour</label><select id="ruBeh">${behaviours.map(b=>`<option value="${b}" ${r.behaviour_type===b?'selected':''}>${prettyBehaviour(b)}</option>`).join('')}</select>
     <label>Site</label><select id="ruSite"><option value="">All sites</option>${sites.map(s=>`<option value="${s.id}" ${r.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
     <label>Description</label><textarea id="ruDesc" rows="2">${esc(r.description||'')}</textarea>
     <label>Alert threshold (0–100) — risk level at/above which an alert fires</label><input id="ruThresh" type="number" min="0" max="100" value="${r.alert_threshold!=null?r.alert_threshold:50}">
@@ -466,14 +547,27 @@ async function saveRule(id){
 }
 async function delRule(id){if(!confirm('Delete this rule?'))return;try{await api('/api/rules/'+id,{method:'DELETE'});}catch(e){toast(e.message);return;}toast('Rule deleted');loadRules();}
 
-/* ---------- USERS ---------- */
+/* ---------- UC-07 USERS ---------- */
 async function viewUsers(){
   const v=document.getElementById('view');
   v.innerHTML=`<div class="head"><div><h2>Users &amp; Audit Trail</h2>
     <div class="desc">Manage accounts and role-based access. All changes are logged.</div></div>
     <div class="controls"><button class="btn" onclick="openUser()">+ New user</button></div></div>
     <div class="card" id="usersBody"><div class="empty">Loading…</div></div>
-    <h3 class="section">Audit Log</h3><div class="card" id="auditBody"><div class="empty">Loading…</div></div>`;
+    <div class="head" style="margin:26px 0 14px"><div><h3 style="font-size:15px;font-weight:600">Audit Log</h3></div>
+      <div class="controls">
+        <select id="auCat" onchange="renderAudit()">
+          <option value="">All activity</option>
+          <option value="auth">Sign in / out</option>
+          <option value="validation">Incident validation</option>
+          <option value="rules">Rule changes</option>
+          <option value="users">User management</option>
+          <option value="reports">Reports</option>
+          <option value="retention">Data retention</option>
+        </select>
+        <select id="auUser" onchange="renderAudit()"><option value="">All users</option></select>
+      </div></div>
+    <div class="card" id="auditBody"><div class="empty">Loading…</div></div>`;
   loadUsers();loadAudit();
 }
 async function loadUsers(){
@@ -482,15 +576,81 @@ async function loadUsers(){
     rows.map(u=>`<tr><td class="mono">${esc(u.username)}</td><td>${esc(u.role_label)}</td>
       <td>${esc(u.site_name||'—')}</td><td class="mono">${fmtTime(u.created_at)}</td>
       <td><button class="btn sm ghost" onclick='openUser(${JSON.stringify(u)})'>Edit</button>
-          <button class="btn sm danger" onclick="delUser(${u.id},'${esc(u.username)}')">Del</button></td></tr>`).join('')
+          <button class="btn sm danger" onclick="delUser(${u.id},'${esc(u.username)}')">Delete</button></td></tr>`).join('')
     +`</tbody></table>`;
 }
+function describeAudit(a){
+  const d = a.details || '';
+  const tc = s => (s||'').replace(/_/g,' ').replace(/\b\w/g, ch => ch.toUpperCase());
+  switch(a.action){
+    case 'LOGIN':  return 'Signed in';
+    case 'LOGOUT': return 'Signed out';
+    case 'VALIDATE_INCIDENT': {
+      const sm = d.match(/status=([^;]+)/); const rm = d.match(/reason=(.+)$/);
+      const st = sm ? tc(sm[1].trim()) : '';
+      const rs = rm ? rm[1].trim() : '';
+      let s = `Validated incident${a.target_id?(' #'+a.target_id):''}`;
+      if(st) s += ` as ${st}`;
+      if(rs) s += ` — "${esc(rs)}"`;
+      return s;
+    }
+    case 'CREATE_USER': {
+      const m = d.match(/^(.*)\s+\((.+)\)$/);
+      return m ? `Created user "${esc(m[1])}" (${tc(m[2])})` : `Created a user ${esc(d)}`;
+    }
+    case 'UPDATE_USER': return `Updated user "${esc(d)}"`;
+    case 'DELETE_USER': return `Removed user "${esc(d)}"`;
+    case 'CREATE_RULE': return `Created rule "${esc(d)}"`;
+    case 'UPDATE_RULE': return `Updated rule "${esc(d)}"`;
+    case 'DELETE_RULE': return 'Deleted a rule';
+    case 'GENERATE_REPORT':
+    case 'EXPORT_REPORT_CSV': {
+      const pm = d.match(/^(\S+)\.\.(\S+)/);
+      const bm = d.match(/behaviour=(\S+)/);
+      const period = pm ? `${pm[1]} to ${pm[2]}` : '';
+      const beh = bm && bm[1] !== 'all' ? `, ${tc(bm[1])}` : '';
+      const verb = a.action === 'EXPORT_REPORT_CSV' ? 'Exported a report to CSV' : 'Generated a report';
+      return period ? `${verb} (${period}${beh})` : verb;
+    }
+    case 'UPDATE_RETENTION_POLICY': {
+      const m = d.match(/retention_days=(\d+)/);
+      return m ? `Changed data-retention period to ${m[1]} days` : 'Changed the data-retention policy';
+    }
+    case 'PURGE_EXPIRED_DATA': {
+      const m = d.match(/Deleted (\d+)/);
+      return m ? `Purged ${m[1]} expired record(s) (GDPR retention)` : 'Purged expired data (GDPR retention)';
+    }
+    default: return tc(a.action) + (d ? ` — ${esc(d)}` : '');
+  }
+}
+const AUDIT_CATEGORIES = {
+  auth:       ['LOGIN','LOGOUT'],
+  validation: ['VALIDATE_INCIDENT'],
+  rules:      ['CREATE_RULE','UPDATE_RULE','DELETE_RULE'],
+  users:      ['CREATE_USER','UPDATE_USER','DELETE_USER'],
+  reports:    ['GENERATE_REPORT','EXPORT_REPORT_CSV'],
+  retention:  ['UPDATE_RETENTION_POLICY','PURGE_EXPIRED_DATA'],
+};
+let auditRows = [];
 async function loadAudit(){
-  let rows;try{rows=await api('/api/audit-logs');}catch(e){return;}
-  document.getElementById('auditBody').innerHTML=rows.length?`<table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody>`+
+  try{auditRows=await api('/api/audit-logs');}catch(e){return;}
+  // populate the user filter with the distinct users present in the log
+  const sel=document.getElementById('auUser');
+  if(sel){
+    const users=[...new Set(auditRows.map(a=>a.username).filter(Boolean))].sort();
+    sel.innerHTML='<option value="">All users</option>'+users.map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+  }
+  renderAudit();
+}
+function renderAudit(){
+  const cat=(document.getElementById('auCat')||{}).value||'';
+  const user=(document.getElementById('auUser')||{}).value||'';
+  let rows=auditRows;
+  if(cat) rows=rows.filter(a=>(AUDIT_CATEGORIES[cat]||[]).includes(a.action));
+  if(user) rows=rows.filter(a=>a.username===user);
+  document.getElementById('auditBody').innerHTML=rows.length?`<table><thead><tr><th>Time</th><th>User</th><th>Action</th></tr></thead><tbody>`+
     rows.map(a=>`<tr><td class="mono">${fmtTime(a.timestamp)}</td><td class="mono">${esc(a.username||'—')}</td>
-      <td>${esc(a.action)}</td><td>${esc(a.target_type||'—')}${a.target_id?(' #'+a.target_id):''}</td>
-      <td class="desc">${esc(a.details||'')}</td></tr>`).join('')+`</tbody></table>`:`<div class="empty">No audit entries.</div>`;
+      <td>${describeAudit(a)}</td></tr>`).join('')+`</tbody></table>`:`<div class="empty">No matching audit entries.</div>`;
 }
 const ROLES=[['manager','Site / Production Manager'],['quality_team','Quality & Food Safety Team'],
   ['senior_manager','Senior / Regional Manager'],['auditor','Auditor / Inspector'],['admin','System Administrator']];
