@@ -1,33 +1,41 @@
 {
-  "site_name": "1",
+  "site_name": "yc",
   "camera_id": "1",
   "camera_source": 0,
   "frame_width": 640,
   "frame_height": 480,
-  "min_wash_duration": 15,
+  "min_wash_duration": 20,
   "zones": {
     "sink_tap": [
       {
-        "x1": 34,
-        "y1": 262,
-        "x2": 241,
-        "y2": 424
+        "x1": 71,
+        "y1": 245,
+        "x2": 366,
+        "y2": 478
       }
     ],
     "soap_dispenser": [
       {
-        "x1": 71,
-        "y1": 47,
-        "x2": 170,
-        "y2": 159
+        "x1": 1,
+        "y1": 72,
+        "x2": 202,
+        "y2": 278
       }
     ],
     "dryer": [
       {
-        "x1": 398,
-        "y1": 114,
-        "x2": 520,
-        "y2": 260
+        "x1": 414,
+        "y1": 1,
+        "x2": 638,
+        "y2": 245
+      }
+    ],
+    "water_stream": [
+      {
+        "x1": 133,
+        "y1": 244,
+        "x2": 158,
+        "y2": 273
       }
     ]
   }

@@ -9,6 +9,7 @@ from collections import deque
 from ultralytics import YOLO
 from hand_analysis import HandAnalyser
 from integration import send_to_dashboard
+from water_detection import WaterMovementDetector
 
 # ── Load site config ─────────────────────────────────────────────
 def parse_camera_source(source):
@@ -114,6 +115,7 @@ soap_entry_time               = 0.0
 body_dry_start                = 0.0
 body_dry_duration             = 0.0
 body_dry_wrist_history        = deque(maxlen=45)  # ~1.5s at 30fps
+water_detected                = False
 
 lw_history = deque(maxlen=3)
 rw_history = deque(maxlen=3)
@@ -136,6 +138,8 @@ BODY_DRY_MIN_REVERSALS    = 3
 RECONTAMINATION_MONITOR_TIME  = 8.0
 RECONTAMINATION_CONFIRM_TIME  = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
+
+water_detector = WaterMovementDetector()
 
 # ── Frame skip for performance ───────────────────────────────────
 frame_count    = 0
@@ -315,6 +319,7 @@ def reset_session():
     global steps_completed, prev_lw, prev_rw
     global result_display, result_color, rub_confirm_count, technique_summary
     global soap_entry_time, body_dry_start, body_dry_duration
+    global water_detected
 
     state                         = IDLE
     session_start                 = 0.0
@@ -335,6 +340,7 @@ def reset_session():
     soap_entry_time               = 0.0
     body_dry_start                = 0.0
     body_dry_duration             = 0.0
+    water_detected                = False
     body_dry_wrist_history.clear()
     lw_history.clear()
     rw_history.clear()
@@ -350,6 +356,35 @@ while True:
 
     now = time.time()
     draw_zones(frame)
+
+    water_on = water_detector.update(frame, zones)
+
+    # Water status display only. This does not affect the handwashing state machine.
+    if zones.get("water_stream"):
+        water_color = (0, 255, 0) if water_on else (0, 0, 255)
+        cv2.putText(
+            frame,
+            f"Water: {'ON' if water_on else 'OFF'}",
+            (10, 135),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            water_color,
+            2
+        )
+    else:
+        cv2.putText(
+            frame,
+            "Water: NO ZONE",
+            (10, 135),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 165, 255),
+            2
+        )
+
+    if water_on and not water_detected:
+        water_detected = True
+        print("💧 Water detected")
 
     if state not in (IDLE, COMPLETE) and (now - session_start) > SESSION_TIMEOUT:
         print("Session timed out")
