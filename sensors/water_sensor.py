@@ -54,8 +54,7 @@ while True:
 
     if value > 2000:
         # line gap before status
-        lcd.print("WATER", 10, 50, 0x0000FF)
-        lcd.print("DETECTED", 10, 75, 0x0000FF)
+        lcd.print("WATER DETECTED", 10, 50, 0x0000FF)
 
         if not last_state:
             client.publish(MQTT_TOPIC, str(value).encode())
