@@ -1,3 +1,17 @@
+<<<<<<< Updated upstream
+=======
+# ── MQTT Message Format ───────────────────────────────────────────
+# All MQTT connection settings are configured in site_config.json.
+#
+# Flow sensor  (topic: mqtt_topic_flow)
+#   ">2000" = water detected (wet)
+#   "0" = no water detected (dry)
+#
+# Button press (topic: mqtt_topic_button)
+#   "1" = button pressed (simulates soap dispensed)
+# ─────────────────────────────────────────────────────────────────
+
+>>>>>>> Stashed changes
 import cv2
 import argparse
 import json
@@ -33,6 +47,14 @@ camera_source = parse_camera_source(config.get("camera_source", 0))
 frame_width = config.get("frame_width", 480)
 frame_height = config.get("frame_height", 480)
 
+<<<<<<< Updated upstream
+=======
+mqtt_broker = config.get("mqtt_broker", "localhost")
+mqtt_port = config.get("mqtt_port", 1883)
+mqtt_topic_flow = config.get("mqtt_topic_flow", "water/sensor1")
+mqtt_topic_button = config.get("mqtt_topic_button", "sensors/button")
+
+>>>>>>> Stashed changes
 print(f"Config: {config_path}")
 print(f"Camera ID: {camera_id}")
 print(f"Camera source: {camera_source}")
@@ -62,6 +84,60 @@ RIGHT_KNEE     = 14
 # ── MediaPipe Hand Analyser ───────────────────────────────────────
 # analyser = HandAnalyser()  # DISABLED: technique analysis buggy
 
+<<<<<<< Updated upstream
+=======
+# ── MQTT state flags (written by MQTT thread, read by main loop) ──
+mqtt_flow_active = False   # True while raindrop sensor reads wet
+mqtt_soap_pressed = False   # Pulse: True for one main loop tick when button pressed
+mqtt_lock = threading.Lock()
+water_threshold = 2000  # ADC value above which water is considered detected
+
+def on_mqtt_message(client, userdata, msg):
+    global mqtt_flow_active, mqtt_soap_pressed
+
+    payload = msg.payload.decode("utf-8").strip()
+
+    with mqtt_lock:
+        if msg.topic == mqtt_topic_flow:
+            try:
+                water_value = int(payload)
+
+                if water_value >= water_threshold:
+                    mqtt_flow_active = True
+                    print("Water START detected (ADC = {})".format(water_value))
+
+                elif water_value == 0:
+                    mqtt_flow_active = False
+                    print("Water END detected")
+
+                else:
+                    print("Ignoring ADC value:", water_value)
+
+            except ValueError:
+                print("Invalid water sensor value:", payload)
+
+        elif msg.topic == mqtt_topic_button:
+            if payload == "1":
+                mqtt_soap_pressed = True
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print("MQTT connected")
+        client.subscribe(mqtt_topic_flow)
+        client.subscribe(mqtt_topic_button)
+    else:
+        print(f"MQTT connection failed — rc={rc}")
+
+mqtt_client = mqtt.Client()
+mqtt_client.on_connect = on_mqtt_connect
+mqtt_client.on_message = on_mqtt_message
+try:
+    mqtt_client.connect(mqtt_broker, mqtt_port, keepalive=60)
+    mqtt_client.loop_start()   # runs MQTT in background thread
+except Exception as e:
+    print(f"MQTT could not connect: {e} — continuing without MQTT")
+
+>>>>>>> Stashed changes
 # ── Webcam ───────────────────────────────────────────────────────
 if isinstance(camera_source, int):
     if platform.system() == "Windows":
