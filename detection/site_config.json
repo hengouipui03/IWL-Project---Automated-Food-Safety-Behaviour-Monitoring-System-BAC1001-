@@ -30,5 +30,9 @@
         "y2": 422
       }
     ]
-  }
+  },
+  "mqtt_broker": "192.168.1.50",
+  "mqtt_port": 1883,
+  "mqtt_topic_flow": "sensors/flow",
+  "mqtt_topic_button": "sensors/button"
 }
