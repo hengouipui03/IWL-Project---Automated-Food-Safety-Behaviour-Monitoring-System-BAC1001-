@@ -53,7 +53,7 @@ class WaterMovementDetector:
             thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
             motion_ratio = cv2.countNonZero(thresh) / thresh.size
-            active_scores.append(motion_ratio > self.min_motion_ratio)
+            active_scores.append(self.min_motion_ratio < motion_ratio < 0.20)
 
         if not active_scores:
             self.history.append(False)

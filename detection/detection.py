@@ -4,12 +4,14 @@ import json
 import time
 import platform
 import threading
+import random
 import numpy as np
 from collections import deque
 from ultralytics import YOLO
 from hand_analysis import HandAnalyser
 from integration import send_to_dashboard
 from water_detection import WaterMovementDetector
+from evidence_recorder import EvidenceRecorder
 
 # ── Load site config ─────────────────────────────────────────────
 def parse_camera_source(source):
@@ -139,7 +141,11 @@ RECONTAMINATION_MONITOR_TIME  = 8.0
 RECONTAMINATION_CONFIRM_TIME  = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
 
+# Keep all FAIL videos, but only keep 5% of PASS videos for quality control sampling.
+COMPLIANT_VIDEO_SAMPLE_RATE = 0.05
+
 water_detector = WaterMovementDetector()
+evidence_recorder = EvidenceRecorder()
 
 # ── Frame skip for performance ───────────────────────────────────
 frame_count    = 0
@@ -171,6 +177,8 @@ def draw_zones(frame):
             cv2.putText(frame, f"{zone_type} #{i+1}",
                         (z["x1"] + 4, z["y1"] + 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+
 
 def get_body_zone(kp, kp_conf):
     """Torso box — wider and taller to accommodate larger builds."""
@@ -304,12 +312,49 @@ def conclude_session():
     # DISABLED: technique summary print block
     print(f"{'='*30}\n")
 
+    keep_video = result_display != "PASS"
+    if result_display == "PASS":
+        keep_video = random.random() < COMPLIANT_VIDEO_SAMPLE_RATE
+
+    session_evidence_url = evidence_recorder.stop(keep=keep_video)
+    if result_display == "PASS" and session_evidence_url:
+        print("  -> compliant video kept for random QC sample")
+    elif result_display == "PASS":
+        print("  -> compliant video discarded to save storage")
+
     state        = COMPLETE
     result_timer = time.time()
     # Non-blocking — runs in background so the main loop never freezes
     threading.Thread(
         target=send_to_dashboard,
-        args=(result_display, steps_completed, rub_duration, camera_id),
+        args=(result_display, steps_completed.copy(), rub_duration, camera_id),
+        kwargs={"evidence_url": session_evidence_url},
+        daemon=True
+    ).start()
+
+def conclude_missed_session():
+    """Handle a session where the person left before any step was completed.
+
+    This is treated as non-compliant for dashboard storage, so the evidence
+    video is kept and linked to the incident.
+    """
+    global state, result_display, result_color, result_timer
+
+    session_evidence_url = evidence_recorder.stop(keep=True)
+
+    result_display = "MISSED"
+    result_color   = (0, 165, 255)
+    result_timer   = time.time()
+    state          = COMPLETE
+
+    print("MISSED — no steps completed")
+    if session_evidence_url:
+        print("  -> missed/non-compliant video kept")
+
+    threading.Thread(
+        target=send_to_dashboard,
+        args=("FAIL", steps_completed.copy(), rub_duration, camera_id),
+        kwargs={"evidence_url": session_evidence_url},
         daemon=True
     ).start()
 
@@ -340,6 +385,7 @@ def reset_session():
     soap_entry_time               = 0.0
     body_dry_start                = 0.0
     body_dry_duration             = 0.0
+    evidence_recorder.clear_reference()
     water_detected                = False
     body_dry_wrist_history.clear()
     lw_history.clear()
@@ -364,7 +410,7 @@ while True:
         water_color = (0, 255, 0) if water_on else (0, 0, 255)
         cv2.putText(
             frame,
-            f"Water: {'ON' if water_on else 'OFF'}",
+            "Water detected" if water_on else "Water status",
             (10, 135),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -451,12 +497,14 @@ while True:
                 session_start = now
                 # DISABLED: analyser.reset()
                 print("Session started — soap first")
+                evidence_recorder.start(frame)
             elif in_sink:
                 state           = SOAPING
                 session_start   = now
                 sink_entry_time = now
                 # DISABLED: analyser.reset()
                 print("Session started — sink first, waiting for soap...")
+                evidence_recorder.start(frame)
 
         elif state == SOAPING:
             if in_soap and "soap" not in steps_completed:
@@ -665,11 +713,7 @@ while True:
                 if steps_completed:
                     conclude_session()
                 else:
-                    result_display = "MISSED"
-                    result_color   = (0, 165, 255)
-                    result_timer   = now
-                    state          = COMPLETE
-                    print("MISSED — no steps completed")
+                    conclude_missed_session()
 
     else:
         if state not in (IDLE, COMPLETE):
@@ -678,11 +722,7 @@ while True:
                 if steps_completed:
                     conclude_session()
                 else:
-                    result_display = "MISSED"
-                    result_color   = (0, 165, 255)
-                    result_timer   = now
-                    state          = COMPLETE
-                    print("MISSED — no steps completed")
+                    conclude_missed_session()
 
     # ── HUD ──────────────────────────────────────────────────────
     elapsed = (now - session_start) if state not in (IDLE, COMPLETE) else 0.0
@@ -737,12 +777,15 @@ while True:
     cv2.putText(frame, site_name, (10, 470),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
 
+    evidence_recorder.write(frame)
+
     cv2.imshow("Handwash Detection", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 # ── Cleanup ──────────────────────────────────────────────────────
+evidence_recorder.stop(keep=False)
 cap.release()
 cv2.destroyAllWindows()
 # DISABLED: analyser.hands.close()
