@@ -1,6 +1,6 @@
 {
-  "site_name": "test1",
-  "camera_id": "cam1",
+  "site_name": "yc",
+  "camera_id": "1",
   "camera_source": 0,
   "frame_width": 640,
   "frame_height": 480,
@@ -8,31 +8,39 @@
   "zones": {
     "sink_tap": [
       {
-        "x1": 22,
-        "y1": 184,
-        "x2": 312,
-        "y2": 428
+        "x1": 71,
+        "y1": 245,
+        "x2": 366,
+        "y2": 478
       }
     ],
     "soap_dispenser": [
       {
-        "x1": 25,
-        "y1": 57,
-        "x2": 111,
-        "y2": 168
+        "x1": 1,
+        "y1": 72,
+        "x2": 202,
+        "y2": 278
       }
     ],
     "dryer": [
       {
-        "x1": 344,
-        "y1": 176,
-        "x2": 575,
-        "y2": 422
+        "x1": 414,
+        "y1": 1,
+        "x2": 638,
+        "y2": 245
+      }
+    ],
+    "water_stream": [
+      {
+        "x1": 133,
+        "y1": 244,
+        "x2": 158,
+        "y2": 273
       }
     ]
   },
-  "mqtt_broker": "192.168.1.50",
+  "mqtt_broker": "192.168.137.1",
   "mqtt_port": 1883,
-  "mqtt_topic_flow": "sensors/flow",
+  "mqtt_topic_flow": "water/sensor1",
   "mqtt_topic_button": "sensors/button"
 }
