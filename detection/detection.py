@@ -97,23 +97,28 @@ def on_mqtt_message(client, userdata, msg):
             try:
                 water_value = int(payload)
 
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
                 if water_value >= water_threshold:
                     mqtt_flow_active = True
-                    print("Water START detected (ADC = {})".format(water_value))
+                    print("[{}] Water START detected (ADC = {})".format(timestamp, water_value))
 
                 elif water_value == 0:
                     mqtt_flow_active = False
-                    print("Water END detected")
+                    print("[{}] Water END detected".format(timestamp))
 
                 else:
-                    print("Ignoring ADC value:", water_value)
+                    print("[{}] Ignoring ADC value: {}".format(timestamp, water_value))
 
             except ValueError:
-                print("Invalid water sensor value:", payload)
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                print("[{}] Invalid water sensor value: {}".format(timestamp, payload))
 
         elif msg.topic == mqtt_topic_button:
             if payload == "1":
                 mqtt_soap_pressed = True
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                print("[{}] Soap button pressed".format(timestamp))
 
 def on_mqtt_connect(client, userdata, flags, rc):
     if rc == 0:
