@@ -426,6 +426,9 @@ while True:
     now = time.time()
     draw_zones(frame)
 
+    # Save frame AFTER zones are drawn, before HUD text is drawn
+    hud_base = frame.copy()
+
     # ── Read MQTT flags (thread-safe snapshot) ───────────────────
     with mqtt_lock:
         flow_active = mqtt_flow_active
@@ -758,6 +761,13 @@ while True:
     cv2.putText(frame, f"Session: {elapsed:.1f}s", (10, 58),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
     
+    # Refresh MQTT state again right before drawing HUD
+    with mqtt_lock:
+        flow_active = mqtt_flow_active
+    
+    # Restore only the water text area from the original camera frame
+    frame[140:175, 5:200] = hud_base[140:175, 5:200]
+
     water_text = "Water: ON" if flow_active else "Water: OFF"
     water_color = (0, 200, 255) if flow_active else (100, 100, 100)
 
