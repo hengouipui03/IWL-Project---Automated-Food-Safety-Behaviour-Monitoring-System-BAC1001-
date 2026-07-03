@@ -47,7 +47,7 @@ frame_height = config.get("frame_height", 480)
 
 mqtt_broker = config.get("mqtt_broker", "localhost")
 mqtt_port = config.get("mqtt_port", 1883)
-mqtt_topic_flow = config.get("mqtt_topic_flow", "sensors/flow")
+mqtt_topic_flow = config.get("mqtt_topic_flow", "water/sensor1")
 mqtt_topic_button = config.get("mqtt_topic_button", "sensors/button")
 
 print(f"Config: {config_path}")
@@ -85,16 +85,35 @@ RIGHT_KNEE = 14
 mqtt_flow_active = False   # True while raindrop sensor reads wet
 mqtt_soap_pressed = False   # Pulse: True for one main loop tick when button pressed
 mqtt_lock = threading.Lock()
+water_threshold = 2000  # ADC value above which water is considered detected
 
 def on_mqtt_message(client, userdata, msg):
     global mqtt_flow_active, mqtt_soap_pressed
+
     payload = msg.payload.decode("utf-8").strip()
+
     with mqtt_lock:
         if msg.topic == mqtt_topic_flow:
-            mqtt_flow_active = (payload == "1")
+            try:
+                water_value = int(payload)
+
+                if water_value >= water_threshold:
+                    mqtt_flow_active = True
+                    print("Water START detected (ADC = {})".format(water_value))
+
+                elif water_value == 0:
+                    mqtt_flow_active = False
+                    print("Water END detected")
+
+                else:
+                    print("Ignoring ADC value:", water_value)
+
+            except ValueError:
+                print("Invalid water sensor value:", payload)
+
         elif msg.topic == mqtt_topic_button:
             if payload == "1":
-                mqtt_soap_pressed = True   # main loop will consume and clear this
+                mqtt_soap_pressed = True
 
 def on_mqtt_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -738,10 +757,14 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
     cv2.putText(frame, f"Session: {elapsed:.1f}s", (10, 58),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
-    cv2.putText(frame, f"Water: {'ON' if flow_active else 'OFF'}", (10, 160),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                (0, 200, 255) if flow_active else (100, 100, 100), 1)
+    
+    water_text = "Water: ON" if flow_active else "Water: OFF"
+    water_color = (0, 200, 255) if flow_active else (100, 100, 100)
 
+    cv2.putText(frame, water_text, (10, 160),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                water_color, 1)
+    
     if state == RUBBING:
         cv2.putText(frame, f"Rubbing: {rub_duration:.1f}s / {min_wash_duration}s",
                     (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
