@@ -67,4 +67,4 @@ while True:
             client.publish(MQTT_TOPIC, b"0")
             last_state = False
 
-    wait_ms(500)
+    wait_ms(100)
