@@ -14,7 +14,7 @@ conda create -n handwash python=3.11 -y
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate handwash
 echo "Installing packages..."
-pip install flask requests ultralytics opencv-python "mediapipe==0.10.14" numpy
+pip install flask requests ultralytics opencv-python "mediapipe==0.10.14" numpy paho-mqtt imageio-ffmpeg
 
 echo ""
 echo "=== Done. Next steps ==="

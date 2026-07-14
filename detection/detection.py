@@ -21,7 +21,6 @@ from collections import deque
 from ultralytics import YOLO
 from integration import send_to_dashboard
 import paho.mqtt.client as mqtt
-from water_detection import WaterMovementDetector
 from evidence_recorder import EvidenceRecorder
 
 # ── Load site config ─────────────────────────────────────────────
@@ -189,7 +188,6 @@ body_dry_duration             = 0.0
 body_dry_wrist_history        = deque(maxlen=45)  # ~1.5s at 30fps
 rinse_flow_start              = 0.0   # when water flow began during RINSING
 rinse_flow_duration           = 0.0   # total seconds water flowed during RINSING
-water_detected                = False
 
 lw_history = deque(maxlen=3)
 rw_history = deque(maxlen=3)
@@ -215,7 +213,6 @@ RECONTAMINATION_LEAVE_TIMEOUT = 1.0
 # Keep all FAIL videos, but only keep 5% of PASS videos for quality control sampling.
 COMPLIANT_VIDEO_SAMPLE_RATE = 0.05
 
-water_detector = WaterMovementDetector()
 evidence_recorder = EvidenceRecorder()
 
 # ── Frame skip for performance ───────────────────────────────────
@@ -430,7 +427,7 @@ def reset_session():
     global steps_completed, prev_lw, prev_rw
     global result_display, result_color, rub_confirm_count
     global soap_entry_time, body_dry_start, body_dry_duration
-    global rinse_flow_start, rinse_flow_duration, water_detected
+    global rinse_flow_start, rinse_flow_duration
 
     state = IDLE
     session_start = 0.0
@@ -453,7 +450,6 @@ def reset_session():
     rinse_flow_start = 0.0
     rinse_flow_duration = 0.0
     evidence_recorder.clear_reference()
-    water_detected = False
     body_dry_wrist_history.clear()
     lw_history.clear()
     rw_history.clear()
@@ -471,36 +467,6 @@ while True:
 
     # Save frame AFTER zones are drawn, before HUD text is drawn
     hud_base = frame.copy()
-
-    # Water detection (optical)
-    water_on = water_detector.update(frame, zones)
-
-    # Water status display only. This does not affect the handwashing state machine.
-    if zones.get("water_stream"):
-        water_color = (0, 255, 0) if water_on else (0, 0, 255)
-        cv2.putText(
-            frame,
-            "Water detected" if water_on else "Water status",
-            (10, 135),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            water_color,
-            2
-        )
-    else:
-        cv2.putText(
-            frame,
-            "Water: NO ZONE",
-            (10, 135),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 165, 255),
-            2
-        )
-
-    if water_on and not water_detected:
-        water_detected = True
-        print("💧 Water detected")
 
     # ── Read MQTT flags (thread-safe snapshot) ───────────────────
     with mqtt_lock:

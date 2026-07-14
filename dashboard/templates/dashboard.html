@@ -235,6 +235,7 @@ async function viewIncidents(){
     <div class="controls">
       <select id="fStatus" onchange="loadIncidents()">
         <option value="">All statuses</option><option value="compliant">Compliant</option>
+        <option value="compliant_recorded">Compliant (Recorded)</option>
         <option value="non_compliant">Non-compliant</option><option value="unable_to_assess">Unable to assess</option>
         <option value="indeterminate">Indeterminate</option><option value="false_positive">False positive</option>
       </select>
@@ -247,13 +248,14 @@ async function loadIncidents(){
   let rows;try{rows=await api(`/api/incidents?status=${s}&behaviour=${b}&limit=200`);}catch(e){document.getElementById('incBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
   if(!rows.length){document.getElementById('incBody').innerHTML=`<div class="empty">No incidents found.</div>`;return;}
   document.getElementById('incBody').innerHTML=`<table><thead><tr><th>Time</th><th>Behaviour</th><th>Status</th><th>Risk</th><th>Conf.</th><th>Site</th><th>Validated</th><th></th></tr></thead><tbody>`+
-    rows.map(r=>`<tr><td class="mono">${fmtTime(r.timestamp)}</td><td>${prettyBehaviour(r.behaviour_type)}</td>
-      <td><span class="pill ${r.compliance_status}">${statusLabel(r.compliance_status)}</span></td>
+    rows.map(r=>{const hasVideo=!!r.evidence_url;
+      return `<tr><td class="mono">${fmtTime(r.timestamp)}</td><td>${prettyBehaviour(r.behaviour_type)}</td>
+      <td><span class="pill ${r.compliance_status}">${statusLabel(r.compliance_status)}</span>${hasVideo?' <span class="mono" title="Video evidence available" style="font-size:11px;color:var(--muted)">&#127909;</span>':''}</td>
       <td class="risk-${r.risk_level}">${r.risk_level||'—'}</td>
       <td class="mono">${r.confidence!=null?(r.confidence*100).toFixed(0)+'%':'—'}</td>
       <td>${esc(r.site_name)}</td>
       <td>${r.validated?`<span class="tag-val">&#10003; ${esc(r.validator_name||'')}</span>`:'—'}</td>
-      <td><button class="btn sm ghost" onclick="openIncident(${r.id})">${ME.read_only?'View':'Review'}</button></td></tr>`).join('')
+      <td><button class="btn sm ghost" onclick="openIncident(${r.id})">${ME.read_only?'View':'Review'}</button></td></tr>`;}).join('')
     +`</tbody></table>`;
 }
 function buildEvidence(det, r){
@@ -491,18 +493,30 @@ async function loadRetention(){
           <button class="btn ghost" onclick="runPurge()">Purge now</button>`
           :'<div class="desc">View only — admin can change this.</div>'}
       </div>
+    </div>
+    <div class="desc" style="margin:16px 0 10px">Video evidence is more sensitive than the incident record, so it can be kept for a shorter period. Video cutoff: <span class="mono">${new Date(d.video_cutoff).toLocaleDateString()}</span></div>
+    <div class="grid g3">
+      <div><label style="font-size:11.5px;color:var(--muted)">Video retention period (days)</label>
+        <input type="range" id="vidDaysSlider" min="1" max="${d.retention_days}" value="${Math.min(d.video_retention_days, d.retention_days)}"
+          oninput="document.getElementById('vidDaysVal').textContent=this.value" ${isAdmin?'':'disabled'} style="width:100%">
+        <div class="mono" id="vidDaysVal" style="font-size:13px;margin-top:4px">${d.video_retention_days}</div>
+        <div class="desc" style="font-size:11px;margin-top:2px">Cannot exceed the incident retention period (${d.retention_days} days).</div></div>
+      <div><label style="font-size:11.5px;color:var(--muted)">Videos pending purge</label>
+        <div class="val mono" style="font-size:22px;color:${d.videos_pending_purge?'var(--amber)':'var(--green)'}">${d.videos_pending_purge}</div></div>
+      <div></div>
     </div>`;
 }
 async function saveRetention(){
   const days=document.getElementById('retDays').value;
-  try{await api('/api/retention',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention_days:days})});}
+  const vidDays=document.getElementById('vidDaysSlider').value;
+  try{await api('/api/retention',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention_days:days,video_retention_days:vidDays})});}
   catch(e){toast(e.message);return;}
   toast('Retention policy updated');loadRetention();
 }
 async function runPurge(){
-  if(!confirm('Permanently delete all records beyond the retention period? This cannot be undone.'))return;
+  if(!confirm('Permanently delete all records and videos beyond their retention periods? This cannot be undone.'))return;
   let d;try{d=await api('/api/retention/purge',{method:'POST'});}catch(e){toast(e.message);return;}
-  toast(`Purged ${d.deleted} expired record(s)`);loadRetention();
+  toast(`Purged ${d.deleted} record(s) and ${d.videos_deleted} video(s)`);loadRetention();
 }
 async function loadRules(){
   let rows;try{rows=await api('/api/rules');}catch(e){document.getElementById('rulesBody').innerHTML=`<div class="banner warn">${e.message}</div>`;return;}
