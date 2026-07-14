@@ -2,8 +2,8 @@
 # All MQTT connection settings are configured in site_config.json.
 #
 # Flow sensor  (topic: mqtt_topic_flow)
-#   "1" = water detected (wet)
-#   "0" = no water detected (dry)
+#   ">2000" = water detected (wet)
+#   "<2000" = no water detected (dry)
 #
 # Button press (topic: mqtt_topic_button)
 #   "1" = button pressed (simulates soap dispensed)
@@ -15,12 +15,14 @@ import json
 import time
 import platform
 import threading
+import random
 import numpy as np
 from collections import deque
 from ultralytics import YOLO
 from hand_analysis import HandAnalyser
 from integration import send_to_dashboard
 import paho.mqtt.client as mqtt
+from evidence_recorder import EvidenceRecorder
 
 # ── Load site config ─────────────────────────────────────────────
 def parse_camera_source(source):
@@ -82,13 +84,17 @@ RIGHT_KNEE = 14
 # analyser = HandAnalyser()  # DISABLED: technique analysis buggy
 
 # ── MQTT state flags (written by MQTT thread, read by main loop) ──
-mqtt_flow_active = False   # True while raindrop sensor reads wet
-mqtt_soap_pressed = False   # Pulse: True for one main loop tick when button pressed
+mqtt_flow_active = False
+mqtt_soap_pressed = False
+
+# Independent screen notice controlled only by MQTT
+mqtt_soap_notice_until = 0.0
+
 mqtt_lock = threading.Lock()
 water_threshold = 2000  # ADC value above which water is considered detected
 
 def on_mqtt_message(client, userdata, msg):
-    global mqtt_flow_active, mqtt_soap_pressed
+    global mqtt_flow_active, mqtt_soap_pressed, mqtt_soap_notice_until
 
     payload = msg.payload.decode("utf-8").strip()
 
@@ -115,10 +121,30 @@ def on_mqtt_message(client, userdata, msg):
                 print("[{}] Invalid water sensor value: {}".format(timestamp, payload))
 
         elif msg.topic == mqtt_topic_button:
+
             if payload == "1":
                 mqtt_soap_pressed = True
+
+                # Keep displaying until MQTT sends 0
+                mqtt_soap_notice_until = float("inf")
+
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                print("[{}] Soap button pressed".format(timestamp))
+                print(
+                    "[{}] MQTT SOAP = 1 — SOAP DISPENSED".format(timestamp),
+                    flush=True
+                )
+
+            elif payload == "0":
+                mqtt_soap_pressed = False
+
+                # Remove SOAP DISPENSED immediately
+                mqtt_soap_notice_until = 0.0
+
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                print(
+                    "[{}] MQTT SOAP = 0 — touch released".format(timestamp),
+                    flush=True
+                )
 
 def on_mqtt_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -212,6 +238,11 @@ BODY_DRY_MIN_REVERSALS = 3
 RECONTAMINATION_MONITOR_TIME = 8.0
 RECONTAMINATION_CONFIRM_TIME = 0.8
 RECONTAMINATION_LEAVE_TIMEOUT = 1.0
+
+# Keep all FAIL/MISSED videos, but only keep 5% of PASS videos for quality-control sampling.
+COMPLIANT_VIDEO_SAMPLE_RATE = 0.05
+
+evidence_recorder = EvidenceRecorder()
 
 # ── Frame skip for performance ───────────────────────────────────
 frame_count = 0
@@ -341,12 +372,12 @@ def log_step(step):
 def conclude_session():
     global state, result_display, result_color, result_timer, technique_summary
 
-    has_soap = "soap"            in steps_completed
-    has_rub = "rub"             in steps_completed
-    has_rinse = "rinse"           in steps_completed
-    has_dry = "dry"             in steps_completed
+    has_soap = "soap" in steps_completed
+    has_rub = "rub" in steps_completed
+    has_rinse = "rinse" in steps_completed
+    has_dry = "dry" in steps_completed
     has_recontamination = "recontamination" in steps_completed
-    has_body_drying = "body_drying"     in steps_completed
+    has_body_drying = "body_drying" in steps_completed
 
     # DISABLED: technique_summary = analyser.get_summary()
     technique_summary = None
@@ -377,12 +408,57 @@ def conclude_session():
     # DISABLED: technique summary print block
     print(f"{'='*30}\n")
 
+    # Evidence recorder logic:
+    # - Keep all FAIL videos.
+    # - Keep only a small random sample of PASS videos to save storage.
+    keep_video = result_display != "PASS"
+    if result_display == "PASS":
+        keep_video = random.random() < COMPLIANT_VIDEO_SAMPLE_RATE
+
+    session_evidence_url = evidence_recorder.stop(keep=keep_video)
+
+    if result_display == "PASS" and session_evidence_url:
+        print("  -> compliant video kept for random QC sample")
+    elif result_display == "PASS":
+        print("  -> compliant video discarded to save storage")
+    elif session_evidence_url:
+        print("  -> non-compliant video kept")
+
     state = COMPLETE
     result_timer = time.time()
-    # Non-blocking — runs in background so the main loop never freezes
+
+    # Preserve the original dashboard fields from your correct code,
+    # and add evidence_url from your teammate's recorder branch.
     threading.Thread(
         target=send_to_dashboard,
-        args=(result_display, steps_completed, rub_duration, camera_id, rinse_flow_duration),
+        args=(result_display, steps_completed.copy(), rub_duration, camera_id, rinse_flow_duration),
+        kwargs={"evidence_url": session_evidence_url},
+        daemon=True
+    ).start()
+
+def conclude_missed_session():
+    """Handle a session where the person left before any step was completed.
+
+    This is treated as non-compliant, so the evidence video is kept and
+    linked to the dashboard incident.
+    """
+    global state, result_display, result_color, result_timer
+
+    session_evidence_url = evidence_recorder.stop(keep=True)
+
+    result_display = "MISSED"
+    result_color = (0, 165, 255)
+    result_timer = time.time()
+    state = COMPLETE
+
+    print("MISSED — no steps completed")
+    if session_evidence_url:
+        print("  -> missed/non-compliant video kept")
+
+    threading.Thread(
+        target=send_to_dashboard,
+        args=("FAIL", steps_completed.copy(), rub_duration, camera_id, rinse_flow_duration),
+        kwargs={"evidence_url": session_evidence_url},
         daemon=True
     ).start()
 
@@ -415,6 +491,7 @@ def reset_session():
     body_dry_duration = 0.0
     rinse_flow_start = 0.0
     rinse_flow_duration = 0.0
+    evidence_recorder.clear_reference()
     body_dry_wrist_history.clear()
     lw_history.clear()
     rw_history.clear()
@@ -438,12 +515,19 @@ while True:
     with mqtt_lock:
         flow_active = mqtt_flow_active
         soap_pressed = mqtt_soap_pressed
-        if mqtt_soap_pressed:
-            mqtt_soap_pressed = False   # consume the pulse
+        soap_notice_until = mqtt_soap_notice_until
+
+    # Record soap as a session step only during SOAPING.
+    # The screen notice is displayed in every state.
+    if state == SOAPING and soap_pressed:
+        if "soap" not in steps_completed:
+            log_step("soap")
+
+        print("Soap step recorded for current session", flush=True)
 
     if state not in (IDLE, COMPLETE) and (now - session_start) > SESSION_TIMEOUT:
-        print("Session timed out")
-        conclude_session()
+                print("Session timed out")
+                conclude_session()
 
     # Run YOLO every other frame for performance
     frame_count += 1
@@ -506,14 +590,10 @@ while True:
                 state = SOAPING
                 session_start = now
                 # DISABLED: analyser.reset()
+                evidence_recorder.start(frame)
                 print("Session started — water flow detected")
 
         elif state == SOAPING:
-            # Soap detected via MQTT button press (simulating soap dispenser)
-            if soap_pressed and "soap" not in steps_completed:
-                log_step("soap")
-                print("Soap dispensed — button press received")
-
             # Wrist zone logic retained for soap dispenser zone detection
             if in_soap and "soap" not in steps_completed:
                 if soap_entry_time == 0.0:
@@ -734,11 +814,7 @@ while True:
                 if steps_completed:
                     conclude_session()
                 else:
-                    result_display = "MISSED"
-                    result_color = (0, 165, 255)
-                    result_timer = now
-                    state = COMPLETE
-                    print("MISSED — no steps completed")
+                    conclude_missed_session()
 
     else:
         if state not in (IDLE, COMPLETE):
@@ -747,21 +823,23 @@ while True:
                 if steps_completed:
                     conclude_session()
                 else:
-                    result_display = "MISSED"
-                    result_color = (0, 165, 255)
-                    result_timer = now
-                    state = COMPLETE
-                    print("MISSED — no steps completed")
+                    conclude_missed_session()
 
     # ── HUD ──────────────────────────────────────────────────────
     elapsed = (now - session_start) if state not in (IDLE, COMPLETE) else 0.0
 
-    cv2.putText(frame, f"State: {state}", (10, 30),
+    if now < soap_notice_until:
+        state_text = "SOAP DISPENSED"
+    else:
+        state_text = state
+
+    cv2.putText(frame, f"State: {state_text}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (0, 255, 0) if person_detected else (0, 0, 255), 2)
+         
     raw_detected = last_keypoints is not None and len(last_keypoints) > 0
     if raw_detected and not person_detected:
-        cv2.putText(frame, "LOW CONF — ignored", (10, 135),
+        cv2.putText(frame, "LOW CONF — ignored", (10, 185),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
     cv2.putText(frame, f"Session: {elapsed:.1f}s", (10, 58),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
@@ -771,63 +849,168 @@ while True:
         flow_active = mqtt_flow_active
     
     # Restore only the water text area from the original camera frame
-    frame[140:175, 5:200] = hud_base[140:175, 5:200]
+    frame[118:148, 5:220] = hud_base[118:148, 5:220]
 
     water_text = "Water: ON" if flow_active else "Water: OFF"
     water_color = (0, 200, 255) if flow_active else (100, 100, 100)
 
-    cv2.putText(frame, water_text, (10, 160),
+    cv2.putText(frame, water_text, (10, 135),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 water_color, 1)
     
+    # ── Current phase information ────────────────────────────────────
     if state == RUBBING:
-        cv2.putText(frame, f"Rubbing: {rub_duration:.1f}s / {min_wash_duration}s",
-                    (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
+        cv2.putText(
+            frame,
+            f"Rubbing: {rub_duration:.1f}s / {min_wash_duration}s",
+            (10, 83),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            1
+        )
 
-    if state == DRYING:
-        cv2.putText(frame, f"Drying: {dry_duration:.1f}s / {MIN_DRY_DURATION}s",
-                    (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 1)
-        bd_col = (0, 80, 255) if body_dry_duration > 0 else (150, 150, 150)
-        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  pts:{len(body_dry_wrist_history)}",
-                    (10, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.45, bd_col, 1)
+    elif state == DRYING:
+        cv2.putText(
+            frame,
+            f"Drying: {dry_duration:.1f}s / {MIN_DRY_DURATION}s",
+            (10, 83),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 0, 255),
+            1
+        )
 
-    if state == RINSING:
-        cv2.putText(frame, f"Rinse flow: {rinse_flow_duration:.1f}s",
-                    (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 1)
-        bd_col = (0, 80, 255) if body_dry_duration > 0 else (150, 150, 150)
-        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  pts:{len(body_dry_wrist_history)}",
-                    (10, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.45, bd_col, 1)
+    elif state == RINSING:
+        cv2.putText(
+            frame,
+            f"Rinse flow: {rinse_flow_duration:.1f}s",
+            (10, 83),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 200, 255),
+            1
+        )
 
-    if state == RECONTAMINATION:
-        bd_col = (0, 80, 255) if body_dry_duration > 0 else (150, 150, 150)
-        cv2.putText(frame, f"Body-dry: {body_dry_duration:.1f}s  pts:{len(body_dry_wrist_history)}",
-                    (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.45, bd_col, 1)
+    elif state == RECONTAMINATION:
+        cv2.putText(
+            frame,
+            "Monitoring after drying",
+            (10, 83),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 165, 255),
+            1
+        )
 
-    if state == SOAPING and soap_entry_time > 0 and "soap" not in steps_completed:
-        grace_remaining = max(0, SOAP_GRACE_PERIOD - (now - soap_entry_time))
-        cv2.putText(frame, f"Waiting for soap... {grace_remaining:.1f}s",
-                    (10, 83), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 1)
+    elif (
+        state == SOAPING
+        and soap_entry_time > 0
+        and "soap" not in steps_completed
+    ):
+        grace_remaining = max(
+            0,
+            SOAP_GRACE_PERIOD - (now - soap_entry_time)
+        )
 
-    # DISABLED: technique HUD overlay during RUBBING state
+        cv2.putText(
+            frame,
+            f"Waiting for soap: {grace_remaining:.1f}s",
+            (10, 83),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 165, 255),
+            1
+        )
 
-    steps_str = " → ".join(steps_completed) if steps_completed else "none"
-    cv2.putText(frame, f"Steps: {steps_str}", (10, 108),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+    # ── Recontamination/body-contact information ─────────────────
+    if "recontamination" in steps_completed:
+        recontamination_text = "Recontamination: DETECTED"
+        recontamination_color = (0, 0, 255)
+
+    elif state == RECONTAMINATION:
+        recontamination_text = "Recontamination: MONITORING"
+        recontamination_color = (0, 165, 255)
+
+    elif state in (RINSING, DRYING):
+        recontamination_text = (
+            f"Body contact: {body_dry_duration:.1f}s"
+        )
+
+        if body_dry_duration > 0:
+            recontamination_color = (0, 165, 255)
+        else:
+            recontamination_color = (120, 120, 120)
+
+    else:
+        recontamination_text = ""
+        recontamination_color = (120, 120, 120)
+
+    if recontamination_text:
+        cv2.putText(
+            frame,
+            recontamination_text,
+            (10, 160),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            recontamination_color,
+            1
+        )
+
+    # Steps must always be displayed
+    steps_str = " -> ".join(steps_completed) if steps_completed else "none"
+
+    cv2.putText(
+        frame,
+        f"Steps: {steps_str}",
+        (10, 108),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (200, 200, 200),
+        1
+    )
 
     if result_display and state == COMPLETE:
-        cv2.putText(frame, result_display, (150, 280),
-                    cv2.FONT_HERSHEY_SIMPLEX, 2.0, result_color, 4)
-        # DISABLED: technique score on result screen
+        cv2.putText(
+            frame,
+            result_display,
+            (150, 280),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            2.0,
+            result_color,
+            4
+        )
 
-    cv2.putText(frame, site_name, (10, 470),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+    cv2.putText(
+        frame,
+        site_name,
+        (10, 470),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (150, 150, 150),
+        1
+    )
+
+    if now < soap_notice_until:
+        cv2.putText(
+            frame,
+            "SOAP DISPENSED",
+            (120, 260),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (0, 255, 0),
+            3
+        )
+
+    evidence_recorder.write(frame)
 
     cv2.imshow("Handwash Detection", frame)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
 # ── Cleanup ──────────────────────────────────────────────────────
+evidence_recorder.stop(keep=False)
 cap.release()
 cv2.destroyAllWindows()
 mqtt_client.loop_stop()
