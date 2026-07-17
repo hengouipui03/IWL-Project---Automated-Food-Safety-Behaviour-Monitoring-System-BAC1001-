@@ -23,10 +23,6 @@ BEHAVIOUR_TYPES = ['handwashing', 'ppe', 'allergen']
 
 # Default data-retention period in days (SR-10 / SFR-10.1)
 DEFAULT_RETENTION_DAYS = 90
-# Video evidence is more sensitive than the incident record itself (it's PII per
-# the spec's own definition), so it gets its own, typically-shorter retention window.
-DEFAULT_VIDEO_RETENTION_DAYS = 30
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ============================================================
@@ -300,33 +296,9 @@ def set_retention_days(days):
     conn.close()
 
 
-def get_video_retention_days():
-    conn = get_db()
-    row = conn.execute("SELECT value FROM settings WHERE key='video_retention_days'").fetchone()
-    conn.close()
-    try:
-        return int(row['value']) if row else DEFAULT_VIDEO_RETENTION_DAYS
-    except (TypeError, ValueError):
-        return DEFAULT_VIDEO_RETENTION_DAYS
-
-
-def set_video_retention_days(days):
-    conn = get_db()
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('video_retention_days', ?)",
-                 (str(int(days)),))
-    conn.commit()
-    conn.close()
-
-
 def retention_cutoff_iso():
     """ISO timestamp; records with timestamp < this are 'expired' (SFR-10.1)."""
     return (datetime.now() - timedelta(days=get_retention_days())).isoformat()
-
-
-def video_retention_cutoff_iso():
-    """ISO timestamp; videos attached to records with timestamp < this are expired,
-    independent of whether the incident row itself has expired yet."""
-    return (datetime.now() - timedelta(days=get_video_retention_days())).isoformat()
 
 
 def retention_clause(alias='i'):
@@ -343,90 +315,26 @@ def count_expired():
     return n
 
 
-def count_expired_videos():
-    """How many stored videos currently sit beyond the video retention window
-    (whether or not their parent incident row has also expired)."""
-    conn = get_db()
-    n = conn.execute('''SELECT COUNT(*) n FROM incidents
-                        WHERE timestamp < ? AND evidence_url IS NOT NULL AND evidence_url != '' ''',
-                     (video_retention_cutoff_iso(),)).fetchone()['n']
-    conn.close()
-    return n
-
-
-def _delete_video_file(evidence_url):
-    """Delete the actual video file on disk for a given evidence_url. Safe to call
-    even if the file is already gone. Returns True if a file was actually removed."""
-    if not evidence_url:
-        return False
-    # evidence_url looks like "/static/evidence/incident_xxx.mp4" — resolve relative
-    # to the dashboard/ folder (where this file lives and where Flask serves static/ from).
-    rel = evidence_url.lstrip('/')
-    fs_path = os.path.join(BASE_DIR, rel)
-    try:
-        if os.path.isfile(fs_path):
-            os.remove(fs_path)
-            return True
-    except OSError:
-        pass
-    return False
-
-
 def purge_expired_data(triggered_by='system'):
-    """Enforce both retention windows (SFR-10.1):
-      1. Videos past the (shorter) video-retention window are deleted and the
-         incident's evidence_url is cleared, even if the incident row itself
-         is kept.
-      2. Incident rows past the (longer) data-retention window are deleted
-         entirely — including their video file, if one still exists.
-    Logs a single audit entry summarising what was purged."""
-    incident_cutoff = retention_cutoff_iso()
-    video_cutoff = video_retention_cutoff_iso()
-
+    """Irreversibly delete incident records past the retention period (SFR-10.1)."""
+    cutoff = retention_cutoff_iso()
     conn = get_db()
-    videos_deleted = 0
-
-    # 1. Video-only expiry: row stays, video goes.
-    video_only_rows = conn.execute(
-        '''SELECT id, evidence_url FROM incidents
-           WHERE timestamp < ? AND timestamp >= ?
-           AND evidence_url IS NOT NULL AND evidence_url != '' ''',
-        (video_cutoff, incident_cutoff)
-    ).fetchall()
-    for row in video_only_rows:
-        if _delete_video_file(row['evidence_url']):
-            videos_deleted += 1
-        conn.execute('UPDATE incidents SET evidence_url=NULL WHERE id=?', (row['id'],))
-
-    # 2. Full incident expiry: delete the video (if any) then the row.
-    expired_rows = conn.execute(
-        'SELECT id, evidence_url FROM incidents WHERE timestamp < ?', (incident_cutoff,)
-    ).fetchall()
-    incidents_deleted = len(expired_rows)
-    for row in expired_rows:
-        if row['evidence_url'] and _delete_video_file(row['evidence_url']):
-            videos_deleted += 1
-    if incidents_deleted:
-        conn.execute('DELETE FROM incidents WHERE timestamp < ?', (incident_cutoff,))
-
-    conn.commit()
+    n = conn.execute('SELECT COUNT(*) n FROM incidents WHERE timestamp < ?', (cutoff,)).fetchone()['n']
+    if n:
+        conn.execute('DELETE FROM incidents WHERE timestamp < ?', (cutoff,))
+        conn.commit()
     conn.close()
-
-    if incidents_deleted or videos_deleted:
-        details = []
-        if incidents_deleted:
-            details.append(f'Deleted {incidents_deleted} record(s) older than {get_retention_days()} days')
-        if videos_deleted:
-            details.append(f'Deleted {videos_deleted} video file(s) (video retention {get_video_retention_days()} days)')
+    if n:
+        # log via a lightweight direct insert (avoids needing a request context)
         conn = get_db()
         conn.execute('''INSERT INTO audit_logs (user_id, username, action, target_type, target_id, details, timestamp)
                         VALUES (?,?,?,?,?,?,?)''',
                      (None, triggered_by, 'PURGE_EXPIRED_DATA', 'incident', None,
-                      '; '.join(details) + ' (GDPR retention)', datetime.now().isoformat()))
+                      f'Deleted {n} record(s) older than {get_retention_days()} days (GDPR retention)',
+                      datetime.now().isoformat()))
         conn.commit()
         conn.close()
-
-    return {'incidents_deleted': incidents_deleted, 'videos_deleted': videos_deleted}
+    return n
 
 
 # ============================================================
@@ -629,11 +537,7 @@ def list_incidents():
             LEFT JOIN users v ON v.id = i.validated_by
             WHERE 1=1 {sfilter}'''
     params = list(sparams)
-    if status == 'compliant_recorded':
-        # Special case: compliant incidents that happen to have video evidence
-        # (the small QC-sampled subset), not a real compliance_status value.
-        q += " AND i.compliance_status = 'compliant' AND i.evidence_url IS NOT NULL AND i.evidence_url != ''"
-    elif status:
+    if status:
         q += ' AND i.compliance_status = ?'; params.append(status)
     if behaviour:
         q += ' AND i.behaviour_type = ?'; params.append(behaviour)
@@ -1129,9 +1033,6 @@ def api_retention_get():
         'retention_days': get_retention_days(),
         'cutoff': retention_cutoff_iso(),
         'expired_pending_purge': count_expired(),
-        'video_retention_days': get_video_retention_days(),
-        'video_cutoff': video_retention_cutoff_iso(),
-        'videos_pending_purge': count_expired_videos(),
     })
 
 
@@ -1149,26 +1050,9 @@ def api_retention_set():
         return jsonify({'error': 'retention_days must be a whole number'}), 400
     if not (1 <= days <= 3650):
         return jsonify({'error': 'retention_days must be between 1 and 3650'}), 400
-
-    # Video retention is optional in the payload; if provided, it must not
-    # exceed the incident retention period — a video shouldn't outlive the
-    # record that explains it.
-    video_days = data.get('video_retention_days')
-    if video_days is not None:
-        try:
-            video_days = int(video_days)
-        except (TypeError, ValueError):
-            return jsonify({'error': 'video_retention_days must be a whole number'}), 400
-        if not (1 <= video_days <= 3650):
-            return jsonify({'error': 'video_retention_days must be between 1 and 3650'}), 400
-        if video_days > days:
-            return jsonify({'error': 'Video retention cannot be longer than the incident retention period'}), 400
-        set_video_retention_days(video_days)
-
     set_retention_days(days)
-    log_action('UPDATE_RETENTION_POLICY', 'settings', None,
-               f'retention_days={days}' + (f'; video_retention_days={video_days}' if video_days is not None else ''))
-    return jsonify({'success': True, 'retention_days': days, 'video_retention_days': get_video_retention_days()})
+    log_action('UPDATE_RETENTION_POLICY', 'settings', None, f'retention_days={days}')
+    return jsonify({'success': True, 'retention_days': days})
 
 
 @app.route('/api/retention/purge', methods=['POST'])
@@ -1177,17 +1061,15 @@ def api_retention_purge():
     u = current_user()
     if u['role'] != 'admin':
         return jsonify({'error': 'Only an administrator can run a purge'}), 403
-    result = purge_expired_data(triggered_by=u['username'])
-    return jsonify({'success': True, 'deleted': result['incidents_deleted'],
-                    'videos_deleted': result['videos_deleted']})
+    deleted = purge_expired_data(triggered_by=u['username'])
+    return jsonify({'success': True, 'deleted': deleted})
 
 
 if __name__ == '__main__':
     init_db()
     seed_data()
     # Enforce retention on startup (SFR-10.1): purge anything already expired.
-    result = purge_expired_data(triggered_by='startup')
-    if result['incidents_deleted'] or result['videos_deleted']:
-        print(f"Retention: purged {result['incidents_deleted']} expired record(s) and "
-              f"{result['videos_deleted']} expired video(s) on startup.")
+    purged = purge_expired_data(triggered_by='startup')
+    if purged:
+        print(f'Retention: purged {purged} expired record(s) on startup.')
     app.run(debug=True, port=5002)
