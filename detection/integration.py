@@ -8,10 +8,10 @@ import requests
 DASHBOARD_URL = "http://localhost:5002"
 
 def send_to_dashboard(result, steps_completed, rub_duration, camera_id,
-                      behaviour_type="handwashing", confidence=None):
+                      behaviour_type="handwashing", confidence=None, evidence_url=None):
     """
     Call this at the end of conclude_session() in detection.py:
-        send_to_dashboard(result_display, steps_completed, rub_duration, camera_id)
+        send_to_dashboard(result_display, steps_completed, rub_duration, camera_id, evidence_url)
     """
     try:
         payload = {
@@ -21,6 +21,7 @@ def send_to_dashboard(result, steps_completed, rub_duration, camera_id,
             "camera_id": str(camera_id),
             "behaviour_type": behaviour_type,
             "confidence": confidence,          # optional 0..1
+            "evidence_url": evidence_url,      # optional video path, e.g. /static/evidence/incident_xxx.mp4
         }
         r = requests.post(f"{DASHBOARD_URL}/api/incidents", json=payload, timeout=5)
         if r.status_code == 201:
