@@ -1,3 +1,5 @@
+'''To be copied and pasted into the M5Stack UIFlow IDE'''
+
 from m5stack import *
 from m5ui import *
 from uiflow import *
