@@ -1,6 +1,19 @@
+# Python
 __pycache__/
 *.pyc
+
+# Local database (contains password hashes + per-machine incident data)
 compliance.db
+
+# Per-machine camera / zone / MQTT configuration.
+# Each person keeps their own; copy site_config.example.json to start.
+site_config.json
+
+# Recorded incident video evidence (real footage - regenerated at runtime,
+# not committed to the repo)
+dashboard/static/evidence/*.mp4
+
+# OS / editor
 .DS_Store
 venv/
 *.log
