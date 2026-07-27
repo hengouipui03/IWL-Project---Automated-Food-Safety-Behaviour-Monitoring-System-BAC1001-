@@ -427,11 +427,11 @@ def conclude_session():
     state = COMPLETE
     result_timer = time.time()
 
-    # Preserve the original dashboard fields from your correct code,
-    # and add evidence_url from your teammate's recorder branch.
+    # Send result to the dashboard. behaviour_type defaults to "handwashing";
+    # evidence_url is passed by keyword so it lands in the correct field.
     threading.Thread(
         target=send_to_dashboard,
-        args=(result_display, steps_completed.copy(), rub_duration, camera_id, rinse_flow_duration),
+        args=(result_display, steps_completed.copy(), rub_duration, camera_id),
         kwargs={"evidence_url": session_evidence_url},
         daemon=True
     ).start()
@@ -457,7 +457,7 @@ def conclude_missed_session():
 
     threading.Thread(
         target=send_to_dashboard,
-        args=("FAIL", steps_completed.copy(), rub_duration, camera_id, rinse_flow_duration),
+        args=("FAIL", steps_completed.copy(), rub_duration, camera_id),
         kwargs={"evidence_url": session_evidence_url},
         daemon=True
     ).start()
