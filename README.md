@@ -83,6 +83,26 @@ WiFi and MQTT broker details at the top of those files to match your network.
 
 ---
 
+## Create your config file (first time only)
+
+The project does NOT include a ready-made `site_config.json` - each camera
+needs its own (the zones depend on where that camera is pointed), so it is
+deliberately not shared in the repo. When you first clone the project you must
+create your own from the provided template:
+
+    cd detection
+    cp site_config.example.json site_config.json
+
+(On Windows: `copy site_config.example.json site_config.json`)
+
+Then edit the values - or, easier, draw your zones with the tool below, which
+writes them into site_config.json for you. You only do this once per camera.
+
+If you skip this step, detection.py will fail with a "file not found" error
+because it has no config to read.
+
+---
+
 ## Draw the zones (one time per camera)
 
     conda activate handwash
@@ -150,7 +170,7 @@ FAIL and MISSED incidents automatically save a video clip to
 dashboard/static/evidence/. PASS incidents keep a video only for a random 5%
 quality-control sample, to save storage. Video evidence has its own retention
 setting - separate from the incident record and capped at or below it - under
-Rules & Alerts (admin only). It can be set as low as 0 days for same-day removal.
+Rules & Alerts (admin only). The minimum is 1 day.
 
 ---
 
@@ -173,6 +193,9 @@ All use password `password123`:
 - `module 'mediapipe' has no attribute 'solutions'` -> use the handwash env:
   `conda activate handwash` then `pip install mediapipe==0.10.14`
 - `No module named 'paho'` -> `pip install paho-mqtt`
+- `No such file or directory: 'site_config.json'` -> you haven't created your
+  config yet; run `cp site_config.example.json site_config.json` inside the
+  detection/ folder (see "Create your config file" above).
 - `Could not open camera source 0` -> change `camera_source` in
   detection/site_config.json (try 1), or grant camera permission.
 - `MQTT could not connect...` -> expected if you're not on the same network as
